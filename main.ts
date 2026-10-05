@@ -192,7 +192,7 @@ function daysBetween(from: string, to: string) {
   const end = new Date(to + "T12:00:00-03:00");
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end < start) return [];
   const out: string[] = [];
-  for (let t = start.getTime(); t <= end.getTime() && out.length < 8; t += 86400000) {
+  for (let t = start.getTime(); t <= end.getTime() && out.length < 32; t += 86400000) {
     out.push(new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }));
   }
   return out;
@@ -389,11 +389,16 @@ app.get("/api/reconcile", async (ctx) => {
   const days = daysBetween(from, to);
 
   if (!days.length) return json({ ok: false, message: "Período inválido." }, 400);
-  if (days.length > 7) return json({ ok: false, message: "Consulte no máximo 7 dias por vez nesta fase." }, 400);
+  if (days.length > 31) return json({ ok: false, message: "Consulte no máximo 31 dias por vez." }, 400);
 
   try {
     const results = [];
-    for (const day of days) results.push(await ediDay(user, token, day));
+    const concurrency = 4;
+    for (let i = 0; i < days.length; i += concurrency) {
+      const batch = days.slice(i, i + concurrency);
+      const batchResults = await Promise.all(batch.map((day) => ediDay(user, token, day)));
+      results.push(...batchResults);
+    }
     const rows = results.flatMap((r) => r.rows).sort((a: any, b: any) => String(b.occurred_at).localeCompare(String(a.occurred_at)));
 
     return json({
