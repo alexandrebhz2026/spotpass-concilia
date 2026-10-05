@@ -1,24 +1,36 @@
-# Fresh project
+# SpotPass Concilia
 
-Your new Fresh project is ready to go. You can follow the Fresh "Getting
-Started" guide here: https://fresh.deno.dev/docs/getting-started
+Aplicação web independente para conciliação de transações PagBank usando o EDI oficial e as condições comerciais informadas nos prints da conta SpotPass.
 
-### Usage
+## Hospedagem
+Preparado para Deno Deploy / Fresh.
 
-Make sure to install Deno:
-https://docs.deno.com/runtime/getting_started/installation
+## Variáveis privadas
+Configure no Deno Deploy e **não** grave no GitHub:
 
-Then start the project in development mode:
+- `APP_PASSWORD`: senha compartilhada para acesso da equipe.
+- `PAGBANK_EDI_USER`: usuário da API EDI PagBank.
+- `PAGBANK_EDI_TOKEN`: token da API EDI PagBank.
+- `AUTH_SECRET` (opcional): segredo adicional para assinatura da sessão. Se não existir, o app usa `APP_PASSWORD`.
 
-```
-deno task dev
-```
+## Taxas contratuais cadastradas
+- Débito Visa / Mastercard / Elo: **1,04%**
+- Débito demais bandeiras do grupo: **2,39%**
+- PIX: **0,10%**
+- Crédito Visa / Mastercard 1x: **3,11%**
+- Crédito Elo 1x: **3,39%**
+- Crédito Diners 1x: **3,19%**
+- Crédito Hipercard / grupo 1x: **3,71%**
+- Crédito Visa / Mastercard / Elo 2x–6x: **2,55%**
+- Crédito Hipercard / grupo 2x–6x: **3,00%**
+- Crédito Diners 2x–18x: **3,79%**
+- Crédito demais grupo 7x–18x: **5,59%**
+- Vendas parceladas: **acréscimo de 1,55%/mês**
 
-This will watch the project directory and restart as necessary.
+## Regra importante
+**Não há taxa de antecipação cadastrada.** O acréscimo de **1,55%/mês** mostrado nos prints é tratado como regra de vendas parceladas, separada do MDR base.
 
+Até a fórmula exata desse acréscimo ser calibrada contra uma transação parcelada real do EDI, transações parceladas são exibidas e auditadas, mas não compõem automaticamente o valor “a recuperar”. Isso evita apontar cobrança legítima como divergência.
 
-### Clone and deploy
-
-Deploy your own version of this example with a couple of clicks
-
-[![Deploy on Deno](https://deno.com/button)](https://app.deno.com/new?clone=https://github.com/denoland/examples&path=with-fresh)
+## Segurança
+O EDI é consultado no servidor. USER/TOKEN não são enviados ao navegador.
