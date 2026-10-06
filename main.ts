@@ -151,8 +151,14 @@ function normalize(row: Record<string, unknown>, day: string) {
 async function ediPage(user: string, token: string, day: string, page: number, pageSize = 1000) {
   const auth = btoa(user + ":" + token);
   const url = `${EDI_BASE}/transactional/${day}?pageNumber=${page}&pageSize=${pageSize}`;
-  const response = await fetch(url, { headers: { Authorization: "Basic " + auth, Accept: "application/json" } });
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    response = await fetch(url, { headers: { Authorization: "Basic " + auth, Accept: "application/json" } });
+    if (![429, 500, 502, 503, 504].includes(response.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, 450 * (attempt + 1)));
+  }
 
+  if (!response) throw new Error("PagBank EDI sem resposta.");
   if (response.status === 401 || response.status === 403) throw new Error("Credencial EDI recusada pelo PagBank.");
   if (response.status === 404) return { available: false, validated: null, totalPages: 0, details: [] as Record<string, unknown>[] };
   if (!response.ok) throw new Error("PagBank EDI HTTP " + response.status);
@@ -174,7 +180,18 @@ async function ediDay(user: string, token: string, day: string) {
   if (first.validated === false) return { day, available: true, validated: false, rows: [], received: first.details.length };
 
   const pages = [first];
-  for (let p = 2; p <= first.totalPages; p++) pages.push(await ediPage(user, token, day, p));
+  const pageConcurrency = 5;
+  for (let startPage = 2; startPage <= first.totalPages; startPage += pageConcurrency) {
+    const pageNumbers = Array.from(
+      { length: Math.min(pageConcurrency, first.totalPages - startPage + 1) },
+      (_, i) => startPage + i,
+    );
+    const settled = await Promise.allSettled(pageNumbers.map((p) => ediPage(user, token, day, p)));
+    for (const item of settled) {
+      if (item.status === "fulfilled") pages.push(item.value);
+      else throw item.reason;
+    }
+  }
   const raw = pages.flatMap((p) => p.details);
   const rows = raw.map((row) => normalize(row, day)).filter(Boolean) as any[];
 
@@ -188,12 +205,15 @@ async function ediDay(user: string, token: string, day: string) {
   return { day, available: true, validated: true, rows: unique, received: raw.length };
 }
 function daysBetween(from: string, to: string) {
-  const start = new Date(from + "T12:00:00-03:00");
-  const end = new Date(to + "T12:00:00-03:00");
-  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end < start) return [];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return [];
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const [ty, tm, td] = to.split("-").map(Number);
+  const start = Date.UTC(fy, fm - 1, fd);
+  const end = Date.UTC(ty, tm - 1, td);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
   const out: string[] = [];
-  for (let t = start.getTime(); t <= end.getTime() && out.length < 32; t += 86400000) {
-    out.push(new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }));
+  for (let t = start; t <= end && out.length < 32; t += 86400000) {
+    out.push(new Date(t).toISOString().slice(0, 10));
   }
   return out;
 }
@@ -234,6 +254,36 @@ function summarize(rows: any[]) {
     s[key] = round2(s[key]);
   }
   return s;
+}
+function mergeSummaries(parts: any[]) {
+  const total = {
+    total_rows: 0,
+    gross: 0,
+    pagbank_net: 0,
+    pagbank_fee: 0,
+    expected_base_fee: 0,
+    expected_net: 0,
+    to_recover: 0,
+    divergent_count: 0,
+    unresolved_count: 0,
+    parcel_pending_count: 0,
+  };
+  for (const part of parts) {
+    total.total_rows += Number(part.total_rows || 0);
+    total.gross += Number(part.gross || 0);
+    total.pagbank_net += Number(part.pagbank_net || 0);
+    total.pagbank_fee += Number(part.pagbank_fee || 0);
+    total.expected_base_fee += Number(part.expected_base_fee || 0);
+    total.expected_net += Number(part.expected_net || 0);
+    total.to_recover += Number(part.to_recover || 0);
+    total.divergent_count += Number(part.divergent_count || 0);
+    total.unresolved_count += Number(part.unresolved_count || 0);
+    total.parcel_pending_count += Number(part.parcel_pending_count || 0);
+  }
+  for (const key of ["gross", "pagbank_net", "pagbank_fee", "expected_base_fee", "expected_net", "to_recover"] as const) {
+    total[key] = round2(total[key]);
+  }
+  return total;
 }
 
 async function sign(value: string) {
@@ -313,7 +363,7 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 
 <main class="main"><header class="top"><div><div class="ey">AUDITORIA DE ADQUIRÊNCIA</div><h1 id="title">Visão geral</h1></div><span id="status" class="status">ONLINE</span></header>
 
-<section id="dash" class="page active"><div class="filters"><label class="muted small">De</label><input id="from" class="input" type="date"><label class="muted small">Até</label><input id="to" class="input" type="date"><button id="load" class="btn primary">Atualizar</button></div>
+<section id="dash" class="page active"><div class="filters"><label class="muted small">De</label><input id="from" class="input" type="date"><label class="muted small">Até</label><input id="to" class="input" type="date"><button id="load" class="btn primary">Atualizar</button><span id="periodLabel" class="muted small"></span></div><div id="queryNotice" class="note" style="display:none"></div>
 <div class="note"><b>Contrato:</b> não há taxa de antecipação. Para crédito parcelado, os prints informam <b>acréscimo de 1,55%/mês</b>. Enquanto a fórmula exata desse acréscimo não for calibrada com uma transação parcelada real do EDI, o sistema não inclui essas linhas no valor “a recuperar”.</div>
 <div id="cards" class="grid"></div><div class="panel"><div class="ey">TRANSAÇÃO A TRANSAÇÃO</div><h3 style="margin:5px 0 12px">Maiores diferenças calculáveis</h3><div class="tw"><table><thead><tr><th>Data</th><th>Transação</th><th>Bandeira</th><th>Modalidade</th><th>Parcelas</th><th>Bruto</th><th>MDR base</th><th>Taxa PagBank</th><th>Diferença</th><th>Status</th></tr></thead><tbody id="topRows"></tbody></table></div></div></section>
 
@@ -342,7 +392,32 @@ function renderConc(){const rows=filteredRows(),pages=Math.max(1,Math.ceil(rows.
 function renderDiv(){const rows=data.rows.filter(r=>r.difference_amount!=null&&Number(r.difference_amount)>0).sort((a,b)=>Number(b.difference_amount)-Number(a.difference_amount));const pages=Math.max(1,Math.ceil(rows.length/DIV_SIZE));if(divPage>pages)divPage=pages;const start=(divPage-1)*DIV_SIZE;document.querySelector('#divergences').innerHTML=rows.slice(start,start+DIV_SIZE).map(r=>'<div class="audit-item" data-tx="'+r.transaction_id+'"><b>'+r.transaction_id+' · '+(r.brand||'—')+'</b><span>'+money(r.gross_amount)+'</span><span>'+pct(r.contract_base_rate)+'</span><span class="danger">'+money(r.difference_amount)+'</span></div>').join('')||'<div class="muted">Nenhuma cobrança acima do contrato nas linhas calibradas.</div>';document.querySelector('#divPageInfo').textContent='Página '+divPage+' de '+pages+' • '+rows.length+' divergências';document.querySelector('#divPrev').disabled=divPage<=1;document.querySelector('#divNext').disabled=divPage>=pages}
 function render(){const s=data.summary||{};document.querySelector('#cards').innerHTML=[['Total transacionado',money(s.gross),(s.total_rows||0)+' transações'],['Líquido PagBank',money(s.pagbank_net),'informado no EDI'],['Taxa PagBank',money(s.pagbank_fee),'desconto efetivo'],['A recuperar',money(s.to_recover),'linhas calibradas','hot'],['Parceladas pendentes',String(s.parcel_pending_count||0),'calibrar 1,55%/mês']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const calc=data.rows.filter(r=>r.difference_amount!=null).sort((a,b)=>Math.abs(b.difference_amount)-Math.abs(a.difference_amount));document.querySelector('#topRows').innerHTML=calc.slice(0,6).map(topTr).join('')||'<tr><td colspan="10" class="muted">Sem diferenças calculáveis.</td></tr>';renderConc();renderDiv()}
 function showDetail(id){const r=data.rows.find(x=>String(x.transaction_id)===String(id));if(!r)return;document.querySelector('#detailTitle').textContent=r.transaction_id;const items=[['Data',String(r.occurred_at||'').replace('T',' ')],['Bandeira',r.brand||r.provider_brand||'—'],['Fonte da bandeira',r.brand_source||'—'],['Modalidade',r.payment_method],['Parcelas',r.installments+'x'],['Bruto',money(r.gross_amount)],['MDR base',pct(r.contract_base_rate)],['Acréscimo parcelado',r.parcel_monthly_rate?'1,55%/mês':'—'],['Taxa base esperada',money(r.expected_base_fee_amount)],['Taxa PagBank',money(r.provider_fee_amount)],['Líquido esperado',money(r.expected_net_amount)],['Líquido PagBank',money(r.net_amount)],['Diferença',money(r.difference_amount)],['BIN/IIN',r.card_bin||'—'],['Final cartão',r.last4||'—'],['PDV',r.serial_number||'—']];document.querySelector('#detailGrid').innerHTML=items.map(x=>'<div class="detail"><span>'+x[0]+'</span><b title="'+String(x[1]).replaceAll('"','&quot;')+'">'+x[1]+'</b></div>').join('');document.querySelector('#detailModal').classList.remove('hide')}
-async function load(){document.querySelector('#status').textContent='CARREGANDO EDI...';const f=document.querySelector('#from').value,t=document.querySelector('#to').value;const r=await api('/api/reconcile?from='+encodeURIComponent(f)+'&to='+encodeURIComponent(t));const j=await r.json().catch(()=>({}));if(!r.ok){document.querySelector('#status').textContent=j.message||'ERRO';return}data=j;concPage=1;divPage=1;render();document.querySelector('#status').textContent='EDI DIRETO • '+(j.summary?.total_rows||0)+' TRANSAÇÕES'}
+async function load(){
+  const f=document.querySelector('#from').value,t=document.querySelector('#to').value;
+  const notice=document.querySelector('#queryNotice');
+  document.querySelector('#status').textContent='CARREGANDO...';
+  document.querySelector('#periodLabel').textContent='Consultando '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
+  notice.style.display='none';notice.textContent='';
+  data={rows:[],summary:{}};concPage=1;divPage=1;render();
+  const r=await api('/api/reconcile?from='+encodeURIComponent(f)+'&to='+encodeURIComponent(t));
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){
+    document.querySelector('#status').textContent='ERRO';
+    notice.style.display='block';
+    notice.innerHTML='<b>Não foi possível atualizar '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/')+':</b> '+(j.message||'falha na consulta EDI.');
+    return;
+  }
+  data=j;concPage=1;divPage=1;render();
+  document.querySelector('#periodLabel').textContent='Período carregado: '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
+  if(j.partial){
+    notice.style.display='block';
+    const falhas=(j.failed_days||[]).map(x=>x.day.split('-').reverse().join('/')).join(', ');
+    notice.innerHTML='<b>Consulta parcial.</b> O período correto foi aplicado, mas estes dias falharam no EDI: '+falhas+'. Tente Atualizar novamente.';
+    document.querySelector('#status').textContent='PARCIAL • '+(j.summary?.total_rows||0)+' TRANSAÇÕES';
+  }else{
+    document.querySelector('#status').textContent='EDI DIRETO • '+(j.summary?.total_rows||0)+' TRANSAÇÕES';
+  }
+}
 document.querySelector('#load').onclick=load;
 document.querySelector('#search').oninput=()=>{concPage=1;renderConc()};
 document.querySelector('#concPrev').onclick=()=>{if(concPage>1){concPage--;renderConc()}};
@@ -392,28 +467,60 @@ app.get("/api/reconcile", async (ctx) => {
   if (days.length > 31) return json({ ok: false, message: "Consulte no máximo 31 dias por vez." }, 400);
 
   try {
-    const results = [];
-    const concurrency = 4;
+    const successful: any[] = [];
+    const failed: { day: string; message: string }[] = [];
+    const concurrency = 3;
+
     for (let i = 0; i < days.length; i += concurrency) {
       const batch = days.slice(i, i + concurrency);
-      const batchResults = await Promise.all(batch.map((day) => ediDay(user, token, day)));
-      results.push(...batchResults);
+      const settled = await Promise.allSettled(batch.map((day) => ediDay(user, token, day)));
+
+      settled.forEach((item, index) => {
+        const day = batch[index];
+        if (item.status === "fulfilled") successful.push(item.value);
+        else failed.push({ day, message: String(item.reason?.message || item.reason || "Falha EDI").slice(0, 160) });
+      });
     }
-    const rows = results.flatMap((r) => r.rows).sort((a: any, b: any) => String(b.occurred_at).localeCompare(String(a.occurred_at)));
+
+    if (!successful.length) {
+      return json({
+        ok: false,
+        message: failed[0]?.message || "Nenhum dia do período pôde ser consultado.",
+        range: { from, to },
+        failed_days: failed,
+      }, 502);
+    }
+
+    const summaries = successful.map((r) => summarize(r.rows));
+    const summary = mergeSummaries(summaries);
+
+    // Mantém a resposta mensal leve: só as linhas mais úteis para auditoria.
+    const auditRows = successful
+      .flatMap((r) => r.rows)
+      .sort((a: any, b: any) => {
+        const ad = Math.abs(Number(a.difference_amount ?? -1));
+        const bd = Math.abs(Number(b.difference_amount ?? -1));
+        if (bd !== ad) return bd - ad;
+        return String(b.occurred_at).localeCompare(String(a.occurred_at));
+      })
+      .slice(0, 500);
 
     return json({
       ok: true,
+      partial: failed.length > 0,
       source: "PAGBANK_EDI_DIRECT",
       range: { from, to },
-      summary: summarize(rows),
-      edi_days: results.map((r) => ({
+      summary,
+      rows: auditRows,
+      rows_mode: days.length > 1 ? "TOP_500_AUDITORIA" : "DIA_COMPLETO_ATE_500",
+      edi_days: successful.map((r) => ({
         day: r.day,
         available: r.available,
         validated: r.validated,
         received: r.received,
         eligible: r.rows.length,
       })),
-      rows,
+      failed_days: failed,
     });
   } catch (error) {
     return json({ ok: false, message: (error instanceof Error ? error.message : String(error)).slice(0, 250) }, 502);
