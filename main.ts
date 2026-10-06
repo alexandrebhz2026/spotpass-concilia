@@ -49,6 +49,7 @@ function resolveBrand(row: Record<string, unknown>, method: string) {
   if (text.includes("MASTER")) return { brand: "MASTERCARD", source: "EDI" };
   if (text.includes("ELO")) return { brand: "ELO", source: "EDI" };
   if (text.includes("DINERS")) return { brand: "DINERS", source: "EDI" };
+  if (text.includes("CABAL")) return { brand: "CABAL", source: "EDI" };
   if (text.includes("HIPER")) return { brand: "HIPERCARD", source: "EDI" };
   if (text.includes("AMEX") || text.includes("AMERICAN EXPRESS")) return { brand: "AMEX", source: "EDI" };
 
@@ -437,7 +438,7 @@ document.querySelector('#detailModal').onclick=e=>{if(e.target.id==='detailModal
 document.addEventListener('click',e=>{const row=e.target.closest('[data-tx]');if(row)showDetail(row.dataset.tx)});
 document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.querySelector('#'+b.dataset.page).classList.add('active');document.querySelector('#title').textContent={dash:'Visão geral',conc:'Transações',rates:'Taxas do contrato',div:'A recuperar'}[b.dataset.page]});
 document.querySelector('#rateGrid').innerHTML=[
-['Débito Visa / Mastercard / Elo','1,04%'],['Débito demais bandeiras','2,39%'],['PIX','0,10%'],['Visa / Mastercard crédito 1x','3,11%'],['Elo crédito 1x','3,39%'],['Diners crédito 1x','3,19%'],['Hipercard / grupo crédito 1x','3,71%'],['Visa / Mastercard / Elo 2x–6x','2,55%'],['Hipercard / grupo 2x–6x','3,00%'],['Diners 2x–18x','3,79%'],['Crédito 7x–18x (grupo)','5,59%'],['Acréscimo vendas parceladas','1,55%/mês']
+['Débito Visa / Mastercard / Elo','1,04%'],['Débito Cabal','2,39%'],['Débito demais bandeiras','2,39%'],['PIX','0,10%'],['Visa / Mastercard crédito 1x','3,11%'],['Elo crédito 1x','3,39%'],['Diners crédito 1x','3,19%'],['Hipercard / grupo crédito 1x','3,71%'],['Visa / Mastercard / Elo 2x–6x','2,55%'],['Hipercard / grupo 2x–6x','3,00%'],['Diners 2x–18x','3,79%'],['Crédito 7x–18x (grupo)','5,59%'],['Acréscimo vendas parceladas','1,55%/mês']
 ].map(x=>'<div class="rate"><span class="muted small">'+x[0]+'</span><strong>'+x[1]+'</strong></div>').join('');
 api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){document.querySelector('#login').classList.add('hide');load()}});
 </script></body></html>`;
