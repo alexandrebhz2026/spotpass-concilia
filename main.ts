@@ -513,8 +513,11 @@ const money=v=>v==null?'—':new Intl.NumberFormat('pt-BR',{style:'currency',cur
 const pct=v=>v==null?'—':Number(v).toFixed(2).replace('.',',')+'%';
 function spDay(value){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value));const get=t=>parts.find(p=>p.type===t)?.value||'';return get('year')+'-'+get('month')+'-'+get('day')}
 const lastClosedDay=spDay(Date.now()-86400000);
-['from','to','finFrom','finTo'].forEach(id=>{const el=document.querySelector('#'+id);el.value=lastClosedDay;el.max=lastClosedDay});
-let data={rows:[],summary:{}},financialData={rows:[],summary:{}},monthlyRecoverable={},concPage=1,divPage=1,finPage=1,financialLoaded=false,monthlyLoading=false,financialLoadSeq=0,transactionLoadSeq=0,recoverYearSeq=0;
+function validIsoDay(v){return /^\d{4}-\d{2}-\d{2}$/.test(String(v||''))}
+function readSavedPeriod(){try{const p=JSON.parse(localStorage.getItem('spotpass_concilia_period')||'{}');let from=validIsoDay(p.from)?p.from:lastClosedDay,to=validIsoDay(p.to)?p.to:lastClosedDay;if(to>lastClosedDay)to=lastClosedDay;if(from>to)from=to;return {from,to}}catch{return {from:lastClosedDay,to:lastClosedDay}}}
+let selectedPeriod=readSavedPeriod();
+['from','to','finFrom','finTo'].forEach(id=>{const el=document.querySelector('#'+id);el.max=lastClosedDay});
+let data={rows:[],summary:{}},financialData={rows:[],summary:{}},monthlyRecoverable={},concPage=1,divPage=1,finPage=1,financialLoaded=false,monthlyLoading=false,financialLoadSeq=0,transactionLoadSeq=0,recoverYearSeq=0,periodRefreshSeq=0,periodRefreshTimer=null;
 const PAGE_SIZE=8,DIV_SIZE=8,FIN_SIZE=8;
 const MONTH_NAMES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 let recoverYear=Number(lastClosedDay.slice(0,4)),selectedRecoverMonth=null;
@@ -523,11 +526,51 @@ function isoDays(from,to){const a=new Date(from+'T00:00:00Z'),b=new Date(to+'T00
 function emptyFinancialSummary(){return {movement_count:0,settlement_count:0,adjustment_count:0,comparable_count:0,recoverable_count:0,total_settled:0,total_fees:0,expected_comparable:0,actual_comparable:0,difference_comparable:0,to_recover:0}}
 function addFinancialSummary(a,b){for(const k of ['movement_count','settlement_count','adjustment_count','comparable_count','recoverable_count','total_settled','total_fees','expected_comparable','actual_comparable','to_recover'])a[k]=Number(a[k]||0)+Number(b?.[k]||0);a.difference_comparable=Number((a.expected_comparable-a.actual_comparable).toFixed(2));for(const k of ['total_settled','total_fees','expected_comparable','actual_comparable','difference_comparable','to_recover'])a[k]=Number(a[k].toFixed(2));return a}
 function currentPage(){return document.querySelector('nav button.active')?.dataset?.page||'dash'}
+function sameRange(range,p=selectedPeriod){return !!range&&range.from===p.from&&range.to===p.to}
+function applySelectedPeriod(from,to,{persist=true}={}){
+  if(!validIsoDay(from))from=selectedPeriod.from||lastClosedDay;
+  if(!validIsoDay(to))to=selectedPeriod.to||lastClosedDay;
+  if(to>lastClosedDay)to=lastClosedDay;
+  if(from>to)from=to;
+  selectedPeriod={from,to};
+  ['from','finFrom'].forEach(id=>document.querySelector('#'+id).value=from);
+  ['to','finTo'].forEach(id=>document.querySelector('#'+id).value=to);
+  if(persist)try{localStorage.setItem('spotpass_concilia_period',JSON.stringify(selectedPeriod))}catch{}
+  const y=Number(from.slice(0,4));
+  if(Number.isFinite(y)&&recoverYearEl&&[...recoverYearEl.options].some(o=>Number(o.value)===y)){recoverYear=y;recoverYearEl.value=String(y)}
+  if(from.slice(0,7)===to.slice(0,7))selectedRecoverMonth=from.slice(0,7);
+  renderMonthGrid?.();
+  return selectedPeriod;
+}
+function readPeriodFrom(source){
+  const prefix=source==='financial'?'fin':'';
+  const from=document.querySelector('#'+(prefix?'finFrom':'from')).value;
+  const to=document.querySelector('#'+(prefix?'finTo':'to')).value;
+  return applySelectedPeriod(from,to);
+}
+function showPeriodOnInputs(){applySelectedPeriod(selectedPeriod.from,selectedPeriod.to,{persist:false})}
+function schedulePeriodRefresh(source='transaction'){
+  if(periodRefreshTimer)clearTimeout(periodRefreshTimer);
+  periodRefreshTimer=setTimeout(()=>refreshSelectedPeriod(source),350);
+}
+async function refreshSelectedPeriod(source='transaction'){
+  const seq=++periodRefreshSeq;
+  const p=readPeriodFrom(source);
+  // Cancel any older period work; each loader continues independently across menu changes.
+  transactionLoadSeq++; financialLoadSeq++;
+  data={rows:[],summary:emptyTransactionSummary(),range:{...p},loading:true,progress:0,total_days:isoDays(p.from,p.to).length};
+  financialData={rows:[],recoverable_rows:[],summary:emptyFinancialSummary(),range:{...p},loading:true,progress:0,total_days:isoDays(p.from,p.to).length};
+  financialLoaded=false;
+  render();renderFinancial();renderDiv();
+  const transactionPromise=load();
+  const financialPromise=(async()=>{await new Promise(r=>setTimeout(r,250));if(seq!==periodRefreshSeq)return;return loadFinancial()})();
+  await Promise.allSettled([transactionPromise,financialPromise]);
+}
 function emptyTransactionSummary(){return {total_rows:0,gross:0,pagbank_net:0,pagbank_fee:0,expected_base_fee:0,expected_net:0,comparable_pagbank_net:0,net_difference:0,to_recover:0,divergent_count:0,unresolved_count:0,parcel_pending_count:0}}
 function addTransactionSummary(a,b){for(const k of ['total_rows','gross','pagbank_net','pagbank_fee','expected_base_fee','expected_net','comparable_pagbank_net','to_recover','divergent_count','unresolved_count','parcel_pending_count'])a[k]=Number(a[k]||0)+Number(b?.[k]||0);a.net_difference=Number((a.expected_net-a.comparable_pagbank_net).toFixed(2));for(const k of ['gross','pagbank_net','pagbank_fee','expected_base_fee','expected_net','comparable_pagbank_net','net_difference','to_recover'])a[k]=Number(a[k].toFixed(2));return a}
 async function fetchTransactionDayWithRetry(dayValue){let lastError='Falha EDI';for(let attempt=0;attempt<5;attempt++){try{const r=await api('/api/reconcile-day?day='+encodeURIComponent(dayValue));const j=await r.json().catch(()=>({}));if(r.ok&&j.ok)return j;lastError=j.message||('HTTP '+r.status)}catch(e){lastError=e?.message||String(e)}if(attempt<4)await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)))}throw new Error(lastError)}
-const recoverYearEl=document.querySelector('#recoverYear');for(let y=Number(lastClosedDay.slice(0,4));y>=Number(lastClosedDay.slice(0,4))-3;y--){const o=document.createElement('option');o.value=String(y);o.textContent=String(y);recoverYearEl.appendChild(o)}recoverYearEl.value=String(recoverYear);
-document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const r=await api('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#password').value})});const j=await r.json();if(!r.ok){document.querySelector('#loginErr').textContent=j.message||'Falha';return}document.querySelector('#login').classList.add('hide');load()};
+const recoverYearEl=document.querySelector('#recoverYear');for(let y=Number(lastClosedDay.slice(0,4));y>=Number(lastClosedDay.slice(0,4))-3;y--){const o=document.createElement('option');o.value=String(y);o.textContent=String(y);recoverYearEl.appendChild(o)}recoverYearEl.value=String(recoverYear);showPeriodOnInputs();
+document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const r=await api('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#password').value})});const j=await r.json();if(!r.ok){document.querySelector('#loginErr').textContent=j.message||'Falha';return}document.querySelector('#login').classList.add('hide');refreshSelectedPeriod('transaction')};
 function pill(row){if(row.calculation_status==='PARCELAMENTO_AGUARDA_CALIBRACAO')return '<span class="pill warn">Regra parcelada pendente</span>';if(row.calculation_status==='TAXA_NAO_RESOLVIDA')return '<span class="pill warn">Taxa não identificada</span>';const d=Number(row.difference_amount||0);if(Math.abs(d)<.01)return '<span class="pill ok">Correto</span>';if(d>0)return '<span class="pill bad">Pagou menos</span>';return '<span class="pill ok">Pagou mais</span>'}
 function topTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+money(row.expected_net_amount)+'</td><td>'+money(row.net_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
 function compactTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+pct(row.contract_base_rate)+'</td><td>'+money(row.expected_net_amount)+'</td><td>'+money(row.net_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
@@ -540,7 +583,7 @@ function renderMonthGrid(){const currentYM=lastClosedDay.slice(0,7);let html='';
 async function fetchFinancialDayWithRetry(dayValue){let lastError='Falha EDI';for(let attempt=0;attempt<5;attempt++){try{const r=await api('/api/financial-day?day='+encodeURIComponent(dayValue));const j=await r.json().catch(()=>({}));if(r.ok&&j.ok)return j;lastError=j.message||('HTTP '+r.status)}catch(e){lastError=e?.message||String(e)}if(attempt<4)await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)))}throw new Error(lastError)}
 async function loadMonthSummary(key){if(monthlyRecoverable[key]?.loading||monthlyRecoverable[key]?.loaded)return;const [y,m]=key.split('-').map(Number),from=key+'-01',to=monthClosedEnd(y,m),days=isoDays(from,to);if(!days.length)return;monthlyRecoverable[key]={loading:true,progress:0,total:days.length};renderMonthGrid();let total=0,count=0,failed=[];const concurrency=1;for(let i=0;i<days.length;i+=concurrency){const batch=days.slice(i,i+concurrency);const results=await Promise.all(batch.map(async dayValue=>{try{return {ok:true,data:await fetchFinancialDayWithRetry(dayValue),day:dayValue}}catch(e){return {ok:false,day:dayValue,message:e?.message||String(e)}}}));for(const item of results){if(item.ok){total+=Number(item.data.summary?.to_recover||0);count+=Number(item.data.recoverable_count||item.data.summary?.recoverable_count||0)}else failed.push(item.day)}monthlyRecoverable[key]={loading:true,progress:Math.min(i+batch.length,days.length),total:days.length};renderMonthGrid()}if(failed.length===days.length){monthlyRecoverable[key]={error:true,message:'Todos os dias falharam'};renderMonthGrid();return}monthlyRecoverable[key]={loaded:true,to_recover:Number(total.toFixed(2)),count,partial:failed.length>0,failed_days:failed};renderMonthGrid()}
 async function loadRecoverableYear(year){const seq=++recoverYearSeq;monthlyLoading=true;recoverYear=Number(year);renderMonthGrid();const currentYM=lastClosedDay.slice(0,7),keys=[];for(let m=12;m>=1;m--){const key=monthKey(recoverYear,m);if(key<=currentYM&&!monthlyRecoverable[key]?.loaded)keys.push(key)}let done=0;for(const key of keys){if(seq!==recoverYearSeq)break;await loadMonthSummary(key);if(seq!==recoverYearSeq)break;done++;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+done+'/'+keys.length+' MESES'}if(seq===recoverYearSeq){monthlyLoading=false;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+recoverYear}}
-async function openRecoverMonth(key){selectedRecoverMonth=key;renderMonthGrid();const [y,m]=key.split('-').map(Number);const from=key+'-01',to=monthClosedEnd(y,m);document.querySelector('#finFrom').value=from;document.querySelector('#finTo').value=to;financialLoaded=false;await loadFinancial();monthlyRecoverable[key]={loaded:true,to_recover:Number(financialData.summary?.to_recover||0),count:Number(financialData.summary?.recoverable_count||financialData.recoverable_rows?.length||0),partial:!!financialData.partial};renderMonthGrid();renderDiv()}
+async function openRecoverMonth(key){selectedRecoverMonth=key;renderMonthGrid();const [y,m]=key.split('-').map(Number);const from=key+'-01',to=monthClosedEnd(y,m);applySelectedPeriod(from,to);financialLoaded=false;await refreshSelectedPeriod('financial');monthlyRecoverable[key]={loaded:true,to_recover:Number(financialData.summary?.to_recover||0),count:Number(financialData.summary?.recoverable_count||financialData.recoverable_rows?.length||0),partial:!!financialData.partial,failed_days:financialData.failed_days||[]};renderMonthGrid();renderDiv()}
 function finEventLabel(r){if(r.event_type==='1'&&r.transaction_type==='1')return '<span class="pill ok">Liquidação</span>';if(r.event_type==='6')return '<span class="pill warn">Cancelamento / Estorno</span>';return '<span class="pill warn">Evento '+(r.event_type||'—')+'</span>'}
 function finTr(r){const d=r.settlement_difference_amount;return '<tr><td>'+String(r.movement_date||'')+'</td><td>'+(r.transaction_id||'—')+'</td><td>'+(r.brand||r.provider_brand||'—')+'</td><td>'+r.payment_method+'</td><td>'+r.installment+'/'+r.installments+'</td><td>'+money(r.gross_amount)+'</td><td>'+money(r.expected_settlement_amount)+'</td><td>'+money(r.settled_amount)+'</td><td class="'+(Number(d)>0?'danger':'')+'">'+money(d)+'</td><td>'+finEventLabel(r)+'</td></tr>'}
 function renderFinancial(){const s=financialData.summary||{};document.querySelector('#finCards').innerHTML=[['Liquidado no período',money(s.total_settled),(s.settlement_count||0)+' movimentos de liquidação'],['Taxas no financeiro',money(s.total_fees),'taxa + tarifa EDI'],['Deveria liquidar',money(s.expected_comparable),(s.comparable_count||0)+' operações comparáveis'],['Liquidou',money(s.actual_comparable),'mesmas operações comparáveis'],['A recuperar',money(s.to_recover),'diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const rows=financialData.rows||[],pages=Math.max(1,Math.ceil(rows.length/FIN_SIZE));if(finPage>pages)finPage=pages;const start=(finPage-1)*FIN_SIZE;document.querySelector('#finRows').innerHTML=rows.slice(start,start+FIN_SIZE).map(finTr).join('')||'<tr><td colspan="10" class="muted">Nenhum movimento financeiro no período.</td></tr>';document.querySelector('#finPageInfo').textContent='Página '+finPage+' de '+pages+' • '+rows.length+' movimentos exibidos';document.querySelector('#finPrev').disabled=finPage<=1;document.querySelector('#finNext').disabled=finPage>=pages}
@@ -699,7 +742,7 @@ async function load(){
   }
   button.disabled=false;
 }
-document.querySelector('#load').onclick=load;
+document.querySelector('#load').onclick=()=>refreshSelectedPeriod('transaction');
 document.querySelector('#search').oninput=()=>{concPage=1;renderConc()};
 document.querySelector('#concPrev').onclick=()=>{if(concPage>1){concPage--;renderConc()}};
 document.querySelector('#concNext').onclick=()=>{concPage++;renderConc()};
@@ -707,22 +750,41 @@ document.querySelector('#divPrev').onclick=()=>{if(divPage>1){divPage--;renderDi
 document.querySelector('#divNext').onclick=()=>{divPage++;renderDiv()};
 document.querySelector('#recoverYear').onchange=e=>{recoverYearSeq++;financialLoadSeq++;recoverYear=Number(e.target.value);selectedRecoverMonth=null;financialData={rows:[],recoverable_rows:[],summary:{}};renderDiv();renderMonthGrid();loadRecoverableYear(recoverYear)};
 document.querySelector('#monthGrid').onclick=e=>{const card=e.target.closest('[data-month]');if(card&&!card.disabled)openRecoverMonth(card.dataset.month)};
-document.querySelector('#loadFinancial').onclick=loadFinancial;
-['finFrom','finTo'].forEach(id=>document.querySelector('#'+id).addEventListener('change',()=>{financialLoadSeq++;financialLoaded=false;financialData={rows:[],recoverable_rows:[],summary:emptyFinancialSummary()};renderFinancial();document.querySelector('#finPeriodLabel').textContent='Período alterado — clique em Atualizar recebimentos';document.querySelector('#finNotice').style.display='none';document.querySelector('#status').textContent='PERÍODO ALTERADO'}));
+document.querySelector('#loadFinancial').onclick=()=>refreshSelectedPeriod('financial');
+['from','to'].forEach(id=>document.querySelector('#'+id).addEventListener('change',()=>{readPeriodFrom('transaction');document.querySelector('#periodLabel').textContent='Período alterado — recalculando em segundo plano';document.querySelector('#finPeriodLabel').textContent='Mesmo período — recalculando em segundo plano';schedulePeriodRefresh('transaction')}));
+['finFrom','finTo'].forEach(id=>document.querySelector('#'+id).addEventListener('change',()=>{readPeriodFrom('financial');document.querySelector('#periodLabel').textContent='Mesmo período — recalculando em segundo plano';document.querySelector('#finPeriodLabel').textContent='Período alterado — recalculando em segundo plano';schedulePeriodRefresh('financial')}));
 document.querySelector('#finPrev').onclick=()=>{if(finPage>1){finPage--;renderFinancial()}};
 document.querySelector('#finNext').onclick=()=>{finPage++;renderFinancial()};
 document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailModal').classList.add('hide');
 document.querySelector('#detailModal').onclick=e=>{if(e.target.id==='detailModal')e.currentTarget.classList.add('hide')};
 document.addEventListener('click',e=>{const row=e.target.closest('[data-tx]');if(row)showDetail(row.dataset.tx)});
-document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.querySelector('#'+b.dataset.page).classList.add('active');document.querySelector('#title').textContent={dash:'Visão geral',conc:'Transações',recv:'Recebimentos PagBank',rates:'Taxas do contrato',div:'A recuperar'}[b.dataset.page];if(b.dataset.page==='recv'&&!financialLoaded){document.querySelector('#finFrom').value=document.querySelector('#from').value;document.querySelector('#finTo').value=document.querySelector('#to').value;loadFinancial()}else if(b.dataset.page==='div'){renderMonthGrid();renderDiv();loadRecoverableYear(recoverYear)}else if(b.dataset.page==='recv'){document.querySelector('#status').textContent='FINANCEIRO • '+(financialData.summary?.settlement_count||0)+' MOVIMENTOS'}else if(b.dataset.page==='dash'||b.dataset.page==='conc'){document.querySelector('#status').textContent='EDI TRANSAÇÕES • '+(data.summary?.total_rows||0)+' TRANSAÇÕES'}});
+document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.querySelector('#'+b.dataset.page).classList.add('active');
+  document.querySelector('#title').textContent={dash:'Visão geral',conc:'Transações',recv:'Recebimentos PagBank',rates:'Taxas do contrato',div:'A recuperar'}[b.dataset.page];
+  showPeriodOnInputs();
+  if(b.dataset.page==='recv'){
+    renderFinancial();
+    if(!sameRange(financialData.range))loadFinancial();
+    else document.querySelector('#status').textContent=financialData.loading?'FINANCEIRO • '+(financialData.progress||0)+'/'+(financialData.total_days||0)+' DIAS':'FINANCEIRO • '+(financialData.summary?.settlement_count||0)+' MOVIMENTOS';
+  }else if(b.dataset.page==='div'){
+    if(selectedPeriod.from.slice(0,4)===selectedPeriod.to.slice(0,4)){recoverYear=Number(selectedPeriod.from.slice(0,4));recoverYearEl.value=String(recoverYear)}
+    if(selectedPeriod.from.slice(0,7)===selectedPeriod.to.slice(0,7))selectedRecoverMonth=selectedPeriod.from.slice(0,7);
+    renderMonthGrid();renderDiv();loadRecoverableYear(recoverYear);
+  }else if(b.dataset.page==='dash'||b.dataset.page==='conc'){
+    render();
+    if(!sameRange(data.range))load();
+    else document.querySelector('#status').textContent=data.loading?'TRANSAÇÕES • '+(data.progress||0)+'/'+(data.total_days||0)+' DIAS':'EDI TRANSAÇÕES • '+(data.summary?.total_rows||0)+' TRANSAÇÕES';
+  }
+});
 document.querySelector('#rateGrid').innerHTML=[
 ['Débito Visa / Mastercard / Elo','1,04%'],['Débito Cabal','2,39%'],['Débito demais bandeiras','2,39%'],['PIX','0,10%'],['Visa / Mastercard crédito 1x','3,11%'],['Elo crédito 1x','3,39%'],['Diners crédito 1x','3,19%'],['Hipercard / grupo crédito 1x','3,71%'],['Visa / Mastercard / Elo 2x–6x','2,55%'],['Hipercard / grupo 2x–6x','3,00%'],['Diners 2x–18x','3,79%'],['Crédito 7x–18x (grupo)','5,59%'],['Acréscimo vendas parceladas','1,55%/mês']
 ].map(x=>'<div class="rate"><span class="muted small">'+x[0]+'</span><strong>'+x[1]+'</strong></div>').join('');
-api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){document.querySelector('#login').classList.add('hide');load()}});
+api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){document.querySelector('#login').classList.add('hide');refreshSelectedPeriod('transaction')}});
 </script></body></html>`;
 
 app.get("/", () => html(PAGE, 200, { "cache-control": "no-store" }));
-app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.8.1" }));
+app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.9.0" }));
 app.get("/api/session", async (ctx) => json({ authenticated: await hasSession(ctx.req) }));
 
 app.post("/api/login", async (ctx) => {
