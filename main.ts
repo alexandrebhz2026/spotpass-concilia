@@ -5,6 +5,7 @@ export const app = new App();
 const EDI_BASE = "https://edi.api.pagbank.com.br/movement/v3.00";
 const PARCEL_MONTHLY_RATE = 1.55;
 const FINANCIAL_DAY_CACHE = new Map<string, { expires: number; payload: any }>();
+const TRANSACTION_DAY_CACHE = new Map<string, { expires: number; payload: any }>();
 const RECOVERABLE_MONTH_CACHE = new Map<string, { expires: number; payload: any }>();
 
 function json(data: unknown, status = 200, headers: HeadersInit = {}) {
@@ -522,6 +523,9 @@ function isoDays(from,to){const a=new Date(from+'T00:00:00Z'),b=new Date(to+'T00
 function emptyFinancialSummary(){return {movement_count:0,settlement_count:0,adjustment_count:0,comparable_count:0,recoverable_count:0,total_settled:0,total_fees:0,expected_comparable:0,actual_comparable:0,difference_comparable:0,to_recover:0}}
 function addFinancialSummary(a,b){for(const k of ['movement_count','settlement_count','adjustment_count','comparable_count','recoverable_count','total_settled','total_fees','expected_comparable','actual_comparable','to_recover'])a[k]=Number(a[k]||0)+Number(b?.[k]||0);a.difference_comparable=Number((a.expected_comparable-a.actual_comparable).toFixed(2));for(const k of ['total_settled','total_fees','expected_comparable','actual_comparable','difference_comparable','to_recover'])a[k]=Number(a[k].toFixed(2));return a}
 function currentPage(){return document.querySelector('nav button.active')?.dataset?.page||'dash'}
+function emptyTransactionSummary(){return {total_rows:0,gross:0,pagbank_net:0,pagbank_fee:0,expected_base_fee:0,expected_net:0,comparable_pagbank_net:0,net_difference:0,to_recover:0,divergent_count:0,unresolved_count:0,parcel_pending_count:0}}
+function addTransactionSummary(a,b){for(const k of ['total_rows','gross','pagbank_net','pagbank_fee','expected_base_fee','expected_net','comparable_pagbank_net','to_recover','divergent_count','unresolved_count','parcel_pending_count'])a[k]=Number(a[k]||0)+Number(b?.[k]||0);a.net_difference=Number((a.expected_net-a.comparable_pagbank_net).toFixed(2));for(const k of ['gross','pagbank_net','pagbank_fee','expected_base_fee','expected_net','comparable_pagbank_net','net_difference','to_recover'])a[k]=Number(a[k].toFixed(2));return a}
+async function fetchTransactionDayWithRetry(dayValue){let lastError='Falha EDI';for(let attempt=0;attempt<5;attempt++){try{const r=await api('/api/reconcile-day?day='+encodeURIComponent(dayValue));const j=await r.json().catch(()=>({}));if(r.ok&&j.ok)return j;lastError=j.message||('HTTP '+r.status)}catch(e){lastError=e?.message||String(e)}if(attempt<4)await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)))}throw new Error(lastError)}
 const recoverYearEl=document.querySelector('#recoverYear');for(let y=Number(lastClosedDay.slice(0,4));y>=Number(lastClosedDay.slice(0,4))-3;y--){const o=document.createElement('option');o.value=String(y);o.textContent=String(y);recoverYearEl.appendChild(o)}recoverYearEl.value=String(recoverYear);
 document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const r=await api('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#password').value})});const j=await r.json();if(!r.ok){document.querySelector('#loginErr').textContent=j.message||'Falha';return}document.querySelector('#login').classList.add('hide');load()};
 function pill(row){if(row.calculation_status==='PARCELAMENTO_AGUARDA_CALIBRACAO')return '<span class="pill warn">Regra parcelada pendente</span>';if(row.calculation_status==='TAXA_NAO_RESOLVIDA')return '<span class="pill warn">Taxa não identificada</span>';const d=Number(row.difference_amount||0);if(Math.abs(d)<.01)return '<span class="pill ok">Correto</span>';if(d>0)return '<span class="pill bad">Pagou menos</span>';return '<span class="pill ok">Pagou mais</span>'}
@@ -615,39 +619,83 @@ async function loadFinancial(){
   if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+money(financialData.summary?.to_recover||0);
   button.disabled=false;
 }
-function render(){const s=data.summary||{};const pend=(s.parcel_pending_count||0)+(s.unresolved_count||0);document.querySelector('#cards').innerHTML=[['Total transacionado',money(s.gross),(s.total_rows||0)+' transações'],['PagBank deveria pagar',money(s.expected_net),pend?pend+' transações ainda sem cálculo':'valor pelo contrato'],['PagBank pagou',money(s.comparable_pagbank_net),'mesmas transações calculadas'],['Diferença',money(s.net_difference),Number(s.net_difference)>0?'faltou o PagBank pagar':(Number(s.net_difference)<0?'PagBank pagou a mais':'valores iguais'),Number(s.net_difference)>0?'hot':''],['A recuperar',money(s.to_recover),'soma das diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const calc=data.rows.filter(r=>r.difference_amount!=null).sort((a,b)=>Math.abs(b.difference_amount)-Math.abs(a.difference_amount));document.querySelector('#topRows').innerHTML=calc.slice(0,6).map(topTr).join('')||'<tr><td colspan="10" class="muted">Sem diferenças calculáveis.</td></tr>';renderConc();renderDiv()}
+function render(){const s=data.summary||{};const pend=(s.parcel_pending_count||0)+(s.unresolved_count||0),loadingNote=data.loading?((data.progress||0)+'/'+(data.total_days||0)+' dias carregados'):(s.total_rows||0)+' transações';document.querySelector('#cards').innerHTML=[['Total transacionado',money(s.gross),loadingNote],['PagBank deveria pagar',money(s.expected_net),pend?pend+' transações ainda sem cálculo':'valor pelo contrato'],['PagBank pagou',money(s.comparable_pagbank_net),'mesmas transações calculadas'],['Diferença',money(s.net_difference),Number(s.net_difference)>0?'faltou o PagBank pagar':(Number(s.net_difference)<0?'PagBank pagou a mais':'valores iguais'),Number(s.net_difference)>0?'hot':''],['A recuperar',money(s.to_recover),'soma das diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const calc=data.rows.filter(r=>r.difference_amount!=null).sort((a,b)=>Math.abs(b.difference_amount)-Math.abs(a.difference_amount));document.querySelector('#topRows').innerHTML=calc.slice(0,6).map(topTr).join('')||'<tr><td colspan="10" class="muted">Sem diferenças calculáveis.</td></tr>';renderConc();renderDiv()}
 function showDetail(id){const r=data.rows.find(x=>String(x.transaction_id)===String(id));if(!r)return;document.querySelector('#detailTitle').textContent=r.transaction_id;const items=[['Data',String(r.occurred_at||'').replace('T',' ')],['Bandeira',r.brand||r.provider_brand||'—'],['Fonte da bandeira',r.brand_source||'—'],['Modalidade',r.payment_method],['Parcelas',r.installments+'x'],['Bruto',money(r.gross_amount)],['Taxa do contrato',pct(r.contract_base_rate)],['Acréscimo parcelado',r.parcel_monthly_rate?'1,55%/mês':'—'],['Taxa que deveria descontar',money(r.expected_base_fee_amount)],['Taxa que o PagBank descontou',money(r.provider_fee_amount)],['PagBank deveria pagar',money(r.expected_net_amount)],['PagBank pagou',money(r.net_amount)],['Diferença',money(r.difference_amount)],['BIN/IIN',r.card_bin||'—'],['Final cartão',r.last4||'—'],['PDV',r.serial_number||'—']];document.querySelector('#detailGrid').innerHTML=items.map(x=>'<div class="detail"><span>'+x[0]+'</span><b title="'+String(x[1]).replaceAll('"','&quot;')+'">'+x[1]+'</b></div>').join('');document.querySelector('#detailModal').classList.remove('hide')}
 async function load(){
   let f=document.querySelector('#from').value,t=document.querySelector('#to').value;
-  const notice=document.querySelector('#queryNotice');
+  const notice=document.querySelector('#queryNotice'),button=document.querySelector('#load');
   if(t>lastClosedDay){t=lastClosedDay;document.querySelector('#to').value=t}
   if(f>t){f=t;document.querySelector('#from').value=f}
-  if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='CARREGANDO TRANSAÇÕES...';
+  const days=isoDays(f,t);
+  if(!days.length){notice.style.display='block';notice.textContent='Período inválido.';return}
+  button.disabled=true;
+  if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='TRANSAÇÕES • 0/'+days.length+' DIAS';
   document.querySelector('#periodLabel').textContent='Consultando '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
-  notice.style.display='none';notice.textContent='';
-  data={rows:[],summary:{}};concPage=1;divPage=1;render();
-  const r=await api('/api/reconcile?from='+encodeURIComponent(f)+'&to='+encodeURIComponent(t));
-  const j=await r.json().catch(()=>({}));
-  if(!r.ok){
-    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='ERRO';
-    notice.style.display='block';
-    notice.innerHTML='<b>Não foi possível atualizar '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/')+':</b> '+(j.message||'falha na consulta EDI.');
-    return;
+  notice.style.display='block';
+  notice.innerHTML='<b>Carregando EDI transacional:</b> 0 de '+days.length+' dias.';
+  data={rows:[],summary:emptyTransactionSummary(),range:{from:f,to:t},loading:true,progress:0,total_days:days.length};
+  concPage=1;render();
+
+  const failed=[];
+  let completed=0;
+
+  for(const dayValue of days){
+    try{
+      const j=await fetchTransactionDayWithRetry(dayValue);
+      addTransactionSummary(data.summary,j.summary||{});
+      data.rows.push(...(j.rows||[]));
+      const seen=new Set();
+      data.rows=data.rows.filter(r=>{const k=String(r.transaction_id||'');if(seen.has(k))return false;seen.add(k);return true})
+        .sort((a,b)=>{const ad=Math.abs(Number(a.difference_amount??-1)),bd=Math.abs(Number(b.difference_amount??-1));if(bd!==ad)return bd-ad;return String(b.occurred_at).localeCompare(String(a.occurred_at))})
+        .slice(0,500);
+    }catch(e){
+      failed.push({day:dayValue,message:e?.message||String(e)});
+    }
+    completed++;
+    data.progress=completed;
+    render();
+    notice.innerHTML='<b>Carregando EDI transacional:</b> '+completed+' de '+days.length+' dias'+(failed.length?' • '+failed.length+' com falha':'')+'.';
+    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='TRANSAÇÕES • '+completed+'/'+days.length+' DIAS';
   }
-  data=j;concPage=1;divPage=1;render();
+
+  if(failed.length){
+    const retryDays=[...failed.map(x=>x.day)];
+    failed.length=0;
+    for(const dayValue of retryDays){
+      try{
+        await new Promise(resolve=>setTimeout(resolve,1200));
+        const j=await fetchTransactionDayWithRetry(dayValue);
+        addTransactionSummary(data.summary,j.summary||{});
+        data.rows.push(...(j.rows||[]));
+      }catch(e){
+        failed.push({day:dayValue,message:e?.message||String(e)});
+      }
+    }
+    const seen=new Set();
+    data.rows=data.rows.filter(r=>{const k=String(r.transaction_id||'');if(seen.has(k))return false;seen.add(k);return true})
+      .sort((a,b)=>{const ad=Math.abs(Number(a.difference_amount??-1)),bd=Math.abs(Number(b.difference_amount??-1));if(bd!==ad)return bd-ad;return String(b.occurred_at).localeCompare(String(a.occurred_at))})
+      .slice(0,500);
+  }
+
+  data.loading=false;
+  data.partial=failed.length>0;
+  data.failed_days=failed;
+  render();
   document.querySelector('#periodLabel').textContent='Período carregado: '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
-  if(j.partial){
+
+  if(failed.length){
     notice.style.display='block';
-    const falhas=(j.failed_days||[]).map(x=>x.day.split('-').reverse().join('/')).join(', ');
-    notice.innerHTML='<b>Consulta parcial.</b> O período correto foi aplicado, mas estes dias falharam no EDI: '+falhas+'. Tente Atualizar novamente.';
-    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='PARCIAL • '+(j.summary?.total_rows||0)+' TRANSAÇÕES';
+    notice.innerHTML='<b>Consulta parcial.</b> '+failed.length+' dia(s) ainda falharam: '+failed.map(x=>x.day.split('-').reverse().join('/')).join(', ')+'.';
+    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='PARCIAL • '+(data.summary?.total_rows||0)+' TRANSAÇÕES';
   }else{
-    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='EDI DIRETO • '+(j.summary?.total_rows||0)+' TRANSAÇÕES';
-    if((j.summary?.total_rows||0)===0){
+    notice.style.display='none';notice.textContent='';
+    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='EDI DIRETO • '+(data.summary?.total_rows||0)+' TRANSAÇÕES';
+    if((data.summary?.total_rows||0)===0){
       notice.style.display='block';
-      notice.innerHTML='<b>Sem movimentos no EDI neste período.</b> A consulta foi feita normalmente. O último dia disponível para consulta fechada é '+lastClosedDay.split('-').reverse().join('/')+'.';
+      notice.innerHTML='<b>Sem movimentos no EDI neste período.</b>';
     }
   }
+  button.disabled=false;
 }
 document.querySelector('#load').onclick=load;
 document.querySelector('#search').oninput=()=>{concPage=1;renderConc()};
@@ -671,7 +719,7 @@ api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){do
 </script></body></html>`;
 
 app.get("/", () => html(PAGE, 200, { "cache-control": "no-store" }));
-app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.6.0" }));
+app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.7.0" }));
 app.get("/api/session", async (ctx) => json({ authenticated: await hasSession(ctx.req) }));
 
 app.post("/api/login", async (ctx) => {
@@ -854,6 +902,50 @@ app.get("/api/financial", async (ctx) => {
     edi_days: successful.map((r) => ({ day: r.day, available: r.available, validated: r.validated, received: r.received, eligible: r.rows.length })),
     failed_days: failed,
   });
+});
+
+app.get("/api/reconcile-day", async (ctx) => {
+  if (!(await hasSession(ctx.req))) return json({ ok: false, message: "Sessão expirada." }, 401);
+  const user = Deno.env.get("PAGBANK_EDI_USER");
+  const token = Deno.env.get("PAGBANK_EDI_TOKEN");
+  if (!user || !token) return json({ ok: false, message: "EDI PagBank ainda não configurado no servidor." }, 503);
+
+  const url = new URL(ctx.req.url);
+  const day = url.searchParams.get("day") || "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return json({ ok: false, message: "Data inválida." }, 400);
+
+  const cached = TRANSACTION_DAY_CACHE.get(day);
+  if (cached && cached.expires > Date.now()) return json({ ...cached.payload, cached: true });
+
+  try {
+    const result = await ediDay(user, token, day);
+    const summary = summarize(result.rows || []);
+    const rows = [...(result.rows || [])]
+      .sort((a: any, b: any) => {
+        const ad = Math.abs(Number(a.difference_amount ?? -1));
+        const bd = Math.abs(Number(b.difference_amount ?? -1));
+        if (bd !== ad) return bd - ad;
+        return String(b.occurred_at).localeCompare(String(a.occurred_at));
+      })
+      .slice(0, 80);
+
+    const payload = {
+      ok: true,
+      day,
+      available: result.available,
+      validated: result.validated,
+      received: result.received,
+      summary,
+      rows,
+    };
+
+    if (result.validated === true) {
+      TRANSACTION_DAY_CACHE.set(day, { expires: Date.now() + 6 * 60 * 60 * 1000, payload });
+    }
+    return json(payload);
+  } catch (error) {
+    return json({ ok: false, day, message: (error instanceof Error ? error.message : String(error)).slice(0, 200) }, 502);
+  }
 });
 
 app.get("/api/reconcile", async (ctx) => {
