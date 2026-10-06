@@ -322,6 +322,124 @@ function summarizeFinancial(rows: any[]) {
   };
 }
 
+function emptyFinancialServerSummary() {
+  return {
+    movement_count: 0, settlement_count: 0, adjustment_count: 0, comparable_count: 0,
+    recoverable_count: 0, total_settled: 0, total_fees: 0, expected_comparable: 0,
+    actual_comparable: 0, difference_comparable: 0, to_recover: 0,
+  };
+}
+function addFinancialServerRow(s: any, r: any) {
+  s.movement_count++;
+  const normal = r.event_type === "1" && r.transaction_type === "1";
+  if (!normal) { s.adjustment_count++; return; }
+  s.settlement_count++;
+  s.total_settled += Number(r.settled_amount || 0);
+  s.total_fees += Number(r.total_fee_amount || 0);
+  if (!r.comparable) return;
+  s.comparable_count++;
+  s.expected_comparable += Number(r.expected_settlement_amount || 0);
+  s.actual_comparable += Number(r.settled_amount || 0);
+  const diff = Number(r.settlement_difference_amount || 0);
+  if (diff >= 0.01) { s.recoverable_count++; s.to_recover += diff; }
+}
+function finishFinancialServerSummary(s: any) {
+  s.difference_comparable = round2(s.expected_comparable - s.actual_comparable);
+  for (const key of ["total_settled","total_fees","expected_comparable","actual_comparable","difference_comparable","to_recover"]) s[key] = round2(s[key]);
+  return s;
+}
+async function financialDayCompact(user: string, token: string, day: string) {
+  const pageSize = 500;
+  const first = await ediPage(user, token, day, 1, pageSize, "financial");
+  if (!first.available) return { day, available: false, validated: null, rows: [], recoverable_rows: [], recoverable_count: 0, summary: emptyFinancialServerSummary(), received: 0 };
+  if (first.validated === false) return { day, available: true, validated: false, rows: [], recoverable_rows: [], recoverable_count: 0, summary: emptyFinancialServerSummary(), received: first.details.length };
+
+  const seen = new Set<string>();
+  const summary = emptyFinancialServerSummary();
+  let rows: any[] = [];
+  let recoverableRows: any[] = [];
+  let received = 0;
+
+  const processDetails = (details: Record<string, unknown>[]) => {
+    received += details.length;
+    for (const raw of details) {
+      const r = normalizeFinancial(raw, day);
+      if (seen.has(r.movement_id)) continue;
+      seen.add(r.movement_id);
+      addFinancialServerRow(summary, r);
+      rows.push(r);
+      if (r.comparable && Number(r.settlement_difference_amount || 0) >= 0.01) recoverableRows.push(r);
+    }
+    if (rows.length > 160) rows = rows.sort((a,b)=>String(b.movement_date).localeCompare(String(a.movement_date))).slice(0,80);
+    if (recoverableRows.length > 160) recoverableRows = recoverableRows.sort((a,b)=>Number(b.settlement_difference_amount||0)-Number(a.settlement_difference_amount||0)).slice(0,80);
+  };
+
+  processDetails(first.details);
+  for (let page = 2; page <= first.totalPages; page++) {
+    const next = await ediPage(user, token, day, page, pageSize, "financial");
+    processDetails(next.details);
+  }
+  rows = rows.sort((a,b)=>String(b.movement_date).localeCompare(String(a.movement_date))).slice(0,80);
+  recoverableRows = recoverableRows.sort((a,b)=>Number(b.settlement_difference_amount||0)-Number(a.settlement_difference_amount||0)).slice(0,80);
+  finishFinancialServerSummary(summary);
+  return { day, available: true, validated: true, rows, recoverable_rows: recoverableRows, recoverable_count: summary.recoverable_count, summary, received };
+}
+
+function emptyTransactionServerSummary() {
+  return { total_rows:0,gross:0,pagbank_net:0,pagbank_fee:0,expected_base_fee:0,expected_net:0,comparable_pagbank_net:0,net_difference:0,to_recover:0,divergent_count:0,unresolved_count:0,parcel_pending_count:0 };
+}
+function addTransactionServerRow(s: any, row: any) {
+  s.total_rows++;
+  s.gross += Number(row.gross_amount || 0);
+  s.pagbank_net += Number(row.net_amount || 0);
+  s.pagbank_fee += Number(row.provider_fee_amount || 0);
+  if (row.calculation_status === "TAXA_NAO_RESOLVIDA") { s.unresolved_count++; return; }
+  if (row.calculation_status === "PARCELAMENTO_AGUARDA_CALIBRACAO") { s.parcel_pending_count++; return; }
+  s.expected_base_fee += Number(row.expected_base_fee_amount || 0);
+  s.expected_net += Number(row.expected_net_amount || 0);
+  s.comparable_pagbank_net += Number(row.net_amount || 0);
+  const diff = Number(row.difference_amount || 0);
+  if (diff > 0) s.to_recover += diff;
+  if (Math.abs(diff) >= 0.01) s.divergent_count++;
+}
+function finishTransactionServerSummary(s: any) {
+  s.net_difference = round2(s.expected_net - s.comparable_pagbank_net);
+  for (const key of ["gross","pagbank_net","pagbank_fee","expected_base_fee","expected_net","comparable_pagbank_net","net_difference","to_recover"]) s[key] = round2(s[key]);
+  return s;
+}
+async function ediDayCompact(user: string, token: string, day: string) {
+  const pageSize = 500;
+  const first = await ediPage(user, token, day, 1, pageSize, "transactional");
+  if (!first.available) return { day, available:false, validated:null, rows:[], summary:emptyTransactionServerSummary(), received:0 };
+  if (first.validated === false) return { day, available:true, validated:false, rows:[], summary:emptyTransactionServerSummary(), received:first.details.length };
+
+  const seen = new Set<string>();
+  const summary = emptyTransactionServerSummary();
+  let rows: any[] = [];
+  let received = 0;
+
+  const processDetails = (details: Record<string, unknown>[]) => {
+    received += details.length;
+    for (const raw of details) {
+      const r = normalize(raw, day);
+      if (!r || seen.has(r.transaction_id)) continue;
+      seen.add(r.transaction_id);
+      addTransactionServerRow(summary, r);
+      rows.push(r);
+    }
+    if (rows.length > 160) rows = rows.sort((a,b)=>{const ad=Math.abs(Number(a.difference_amount??-1)),bd=Math.abs(Number(b.difference_amount??-1));if(bd!==ad)return bd-ad;return String(b.occurred_at).localeCompare(String(a.occurred_at))}).slice(0,80);
+  };
+
+  processDetails(first.details);
+  for (let page = 2; page <= first.totalPages; page++) {
+    const next = await ediPage(user, token, day, page, pageSize, "transactional");
+    processDetails(next.details);
+  }
+  rows = rows.sort((a,b)=>{const ad=Math.abs(Number(a.difference_amount??-1)),bd=Math.abs(Number(b.difference_amount??-1));if(bd!==ad)return bd-ad;return String(b.occurred_at).localeCompare(String(a.occurred_at))}).slice(0,80);
+  finishTransactionServerSummary(summary);
+  return { day, available:true, validated:true, rows, summary, received };
+}
+
 function daysBetween(from: string, to: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return [];
   const [fy, fm, fd] = from.split("-").map(Number);
@@ -562,9 +680,18 @@ async function refreshSelectedPeriod(source='transaction'){
   financialData={rows:[],recoverable_rows:[],summary:emptyFinancialSummary(),range:{...p},loading:true,progress:0,total_days:isoDays(p.from,p.to).length};
   financialLoaded=false;
   render();renderFinancial();renderDiv();
-  const transactionPromise=load();
-  const financialPromise=(async()=>{await new Promise(r=>setTimeout(r,250));if(seq!==periodRefreshSeq)return;return loadFinancial()})();
-  await Promise.allSettled([transactionPromise,financialPromise]);
+  if(source==='financial'){
+    await loadFinancial();
+    if(seq!==periodRefreshSeq)return;
+    await new Promise(r=>setTimeout(r,250));
+    await load();
+  }else{
+    await load();
+    if(seq!==periodRefreshSeq)return;
+    await new Promise(r=>setTimeout(r,250));
+    await loadFinancial();
+  }
+  if(seq===periodRefreshSeq&&currentPage()==='div'&&!financialData.loading&&!data.loading) loadRecoverableYear(recoverYear);
 }
 function emptyTransactionSummary(){return {total_rows:0,gross:0,pagbank_net:0,pagbank_fee:0,expected_base_fee:0,expected_net:0,comparable_pagbank_net:0,net_difference:0,to_recover:0,divergent_count:0,unresolved_count:0,parcel_pending_count:0}}
 function addTransactionSummary(a,b){for(const k of ['total_rows','gross','pagbank_net','pagbank_fee','expected_base_fee','expected_net','comparable_pagbank_net','to_recover','divergent_count','unresolved_count','parcel_pending_count'])a[k]=Number(a[k]||0)+Number(b?.[k]||0);a.net_difference=Number((a.expected_net-a.comparable_pagbank_net).toFixed(2));for(const k of ['gross','pagbank_net','pagbank_fee','expected_base_fee','expected_net','comparable_pagbank_net','net_difference','to_recover'])a[k]=Number(a[k].toFixed(2));return a}
@@ -770,7 +897,7 @@ document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{
   }else if(b.dataset.page==='div'){
     if(selectedPeriod.from.slice(0,4)===selectedPeriod.to.slice(0,4)){recoverYear=Number(selectedPeriod.from.slice(0,4));recoverYearEl.value=String(recoverYear)}
     if(selectedPeriod.from.slice(0,7)===selectedPeriod.to.slice(0,7))selectedRecoverMonth=selectedPeriod.from.slice(0,7);
-    renderMonthGrid();renderDiv();loadRecoverableYear(recoverYear);
+    renderMonthGrid();renderDiv();if(!financialData.loading&&!data.loading)loadRecoverableYear(recoverYear);
   }else if(b.dataset.page==='dash'||b.dataset.page==='conc'){
     render();
     if(!sameRange(data.range))load();
@@ -784,7 +911,7 @@ api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){do
 </script></body></html>`;
 
 app.get("/", () => html(PAGE, 200, { "cache-control": "no-store" }));
-app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.9.0" }));
+app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "2.0.0" }));
 app.get("/api/session", async (ctx) => json({ authenticated: await hasSession(ctx.req) }));
 
 app.post("/api/login", async (ctx) => {
@@ -827,18 +954,16 @@ app.get("/api/recoverable-month", async (ctx) => {
   let recoverableCount = 0;
   let movementCount = 0;
   const failed: string[] = [];
-  const concurrency = 3;
+  const concurrency = 1;
 
   for (let i = 0; i < days.length; i += concurrency) {
     const batch = days.slice(i, i + concurrency);
     const results = await Promise.allSettled(batch.map(async (day) => {
       const cachedDay = FINANCIAL_DAY_CACHE.get(day);
       if (cachedDay && cachedDay.expires > Date.now()) return cachedDay.payload;
-      const result = await financialDay(user, token, day);
-      const allRows = result.rows || [];
-      const summary = summarizeFinancial(allRows);
-      const recoverableRows = allRows.filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) >= 0.01);
-      const payload = { ok: true, day, validated: result.validated, summary, recoverable_count: recoverableRows.length };
+      const result = await financialDayCompact(user, token, day);
+      const summary = result.summary;
+      const payload = { ok: true, day, validated: result.validated, summary, recoverable_count: Number(result.recoverable_count || 0) };
       if (result.validated === true) FINANCIAL_DAY_CACHE.set(day, { expires: Date.now() + 6 * 60 * 60 * 1000, payload });
       return payload;
     }));
@@ -884,16 +1009,10 @@ app.get("/api/financial-day", async (ctx) => {
   if (cached && cached.expires > Date.now()) return json({ ...cached.payload, cached: true });
 
   try {
-    const result = await financialDay(user, token, day);
-    const allRows = result.rows || [];
-    const summary = summarizeFinancial(allRows);
-    const rows = [...allRows]
-      .sort((a: any, b: any) => String(b.movement_date).localeCompare(String(a.movement_date)))
-      .slice(0, 80);
-    const recoverableRows = allRows
-      .filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) >= 0.01)
-      .sort((a: any, b: any) => Number(b.settlement_difference_amount || 0) - Number(a.settlement_difference_amount || 0))
-      .slice(0, 80);
+    const result = await financialDayCompact(user, token, day);
+    const summary = result.summary;
+    const rows = result.rows;
+    const recoverableRows = result.recoverable_rows;
 
     const payload = {
       ok: true,
@@ -904,7 +1023,7 @@ app.get("/api/financial-day", async (ctx) => {
       summary,
       rows,
       recoverable_rows: recoverableRows,
-      recoverable_count: recoverableRows.length,
+      recoverable_count: Number(result.recoverable_count || recoverableRows.length),
     };
 
     // Dias validados mudam pouco; cache quente reduz leituras repetidas do EDI.
@@ -983,16 +1102,9 @@ app.get("/api/reconcile-day", async (ctx) => {
   if (cached && cached.expires > Date.now()) return json({ ...cached.payload, cached: true });
 
   try {
-    const result = await ediDay(user, token, day);
-    const summary = summarize(result.rows || []);
-    const rows = [...(result.rows || [])]
-      .sort((a: any, b: any) => {
-        const ad = Math.abs(Number(a.difference_amount ?? -1));
-        const bd = Math.abs(Number(b.difference_amount ?? -1));
-        if (bd !== ad) return bd - ad;
-        return String(b.occurred_at).localeCompare(String(a.occurred_at));
-      })
-      .slice(0, 80);
+    const result = await ediDayCompact(user, token, day);
+    const summary = result.summary;
+    const rows = result.rows;
 
     const payload = {
       ok: true,
