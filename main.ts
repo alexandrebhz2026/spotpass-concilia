@@ -514,7 +514,7 @@ const pct=v=>v==null?'—':Number(v).toFixed(2).replace('.',',')+'%';
 function spDay(value){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value));const get=t=>parts.find(p=>p.type===t)?.value||'';return get('year')+'-'+get('month')+'-'+get('day')}
 const lastClosedDay=spDay(Date.now()-86400000);
 ['from','to','finFrom','finTo'].forEach(id=>{const el=document.querySelector('#'+id);el.value=lastClosedDay;el.max=lastClosedDay});
-let data={rows:[],summary:{}},financialData={rows:[],summary:{}},monthlyRecoverable={},concPage=1,divPage=1,finPage=1,financialLoaded=false,monthlyLoading=false;
+let data={rows:[],summary:{}},financialData={rows:[],summary:{}},monthlyRecoverable={},concPage=1,divPage=1,finPage=1,financialLoaded=false,monthlyLoading=false,financialLoadSeq=0,transactionLoadSeq=0,recoverYearSeq=0;
 const PAGE_SIZE=8,DIV_SIZE=8,FIN_SIZE=8;
 const MONTH_NAMES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 let recoverYear=Number(lastClosedDay.slice(0,4)),selectedRecoverMonth=null;
@@ -536,15 +536,16 @@ function renderConc(){const rows=filteredRows(),pages=Math.max(1,Math.ceil(rows.
 function renderDiv(){const rows=(financialData.recoverable_rows||[]);const pages=Math.max(1,Math.ceil(rows.length/DIV_SIZE));if(divPage>pages)divPage=pages;const start=(divPage-1)*DIV_SIZE;const range=financialData.range;document.querySelector('#divPeriod').innerHTML=range?(financialData.loading?'<b>'+String(range.from).slice(5,7)+'/'+String(range.from).slice(0,4)+':</b> calculando '+(financialData.progress||0)+'/'+(financialData.total_days||0)+' dias. O valor final aparece quando concluir.':'<b>'+String(range.from).slice(5,7)+'/'+String(range.from).slice(0,4)+':</b> '+money(financialData.summary?.to_recover||0)+' a recuperar'+(financialData.partial?' • resultado parcial':'')+' • clique nas linhas para conferir o detalhe.'):'Clique em um mês acima para ver as transações que formam o valor.';document.querySelector('#divergences').innerHTML=rows.slice(start,start+DIV_SIZE).map(r=>'<div class="audit-item"><b>'+(r.transaction_id||r.movement_id)+' · '+(r.brand||r.provider_brand||'—')+'</b><span>'+money(r.gross_amount)+'</span><span>'+money(r.expected_settlement_amount)+'</span><span>'+money(r.settled_amount)+'</span><span class="danger">'+money(r.settlement_difference_amount)+'</span></div>').join('')||'<div class="muted">Nenhuma liquidação com valor a recuperar neste período.</div>';document.querySelector('#divPageInfo').textContent='Página '+divPage+' de '+pages+' • '+rows.length+' divergências de liquidação';document.querySelector('#divPrev').disabled=divPage<=1;document.querySelector('#divNext').disabled=divPage>=pages}
 function monthKey(year,month){return year+'-'+String(month).padStart(2,'0')}
 function monthClosedEnd(year,month){const last=new Date(Date.UTC(year,month,0)).toISOString().slice(0,10);return last>lastClosedDay?lastClosedDay:last}
-function renderMonthGrid(){const currentYM=lastClosedDay.slice(0,7);let html='';for(let m=1;m<=12;m++){const key=monthKey(recoverYear,m),entry=monthlyRecoverable[key],future=key>currentYM,active=selectedRecoverMonth===key;let value='—',sub=future?'Ainda não fechado':'Aguardando cálculo';if(entry?.loading){value='…';sub='Calculando '+(entry.progress||0)+'/'+(entry.total||0)+' dias'}else if(entry?.loaded){value=money(entry.to_recover||0);sub=(entry.count||0)+' divergência'+((entry.count||0)===1?'':'s')+(entry.partial?' • parcial':'')}else if(entry?.error){value='—';sub='Clique para tentar novamente'}html+='<button class="month-card '+(future?'future ':'')+(active?'active':'')+'" data-month="'+key+'" '+(future?'disabled':'')+'><span class="mname">'+MONTH_NAMES[m-1]+'</span><strong>'+value+'</strong><small>'+sub+'</small></button>'}document.querySelector('#monthGrid').innerHTML=html}
+function renderMonthGrid(){const currentYM=lastClosedDay.slice(0,7);let html='';for(let m=1;m<=12;m++){const key=monthKey(recoverYear,m),entry=monthlyRecoverable[key],future=key>currentYM,active=selectedRecoverMonth===key;let value='—',sub=future?'Ainda não fechado':'Aguardando cálculo';if(entry?.loading){value='…';sub='Calculando '+(entry.progress||0)+'/'+(entry.total||0)+' dias'}else if(entry?.loaded&&entry.partial){value='—';sub='Incompleto • '+(entry.failed_days?.length||0)+' dia(s) falharam'}else if(entry?.loaded){value=money(entry.to_recover||0);sub=(entry.count||0)+' divergência'+((entry.count||0)===1?'':'s')}else if(entry?.error){value='—';sub='Clique para tentar novamente'}html+='<button class="month-card '+(future?'future ':'')+(active?'active':'')+'" data-month="'+key+'" '+(future?'disabled':'')+'><span class="mname">'+MONTH_NAMES[m-1]+'</span><strong>'+value+'</strong><small>'+sub+'</small></button>'}document.querySelector('#monthGrid').innerHTML=html}
 async function fetchFinancialDayWithRetry(dayValue){let lastError='Falha EDI';for(let attempt=0;attempt<5;attempt++){try{const r=await api('/api/financial-day?day='+encodeURIComponent(dayValue));const j=await r.json().catch(()=>({}));if(r.ok&&j.ok)return j;lastError=j.message||('HTTP '+r.status)}catch(e){lastError=e?.message||String(e)}if(attempt<4)await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)))}throw new Error(lastError)}
 async function loadMonthSummary(key){if(monthlyRecoverable[key]?.loading||monthlyRecoverable[key]?.loaded)return;const [y,m]=key.split('-').map(Number),from=key+'-01',to=monthClosedEnd(y,m),days=isoDays(from,to);if(!days.length)return;monthlyRecoverable[key]={loading:true,progress:0,total:days.length};renderMonthGrid();let total=0,count=0,failed=[];const concurrency=1;for(let i=0;i<days.length;i+=concurrency){const batch=days.slice(i,i+concurrency);const results=await Promise.all(batch.map(async dayValue=>{try{return {ok:true,data:await fetchFinancialDayWithRetry(dayValue),day:dayValue}}catch(e){return {ok:false,day:dayValue,message:e?.message||String(e)}}}));for(const item of results){if(item.ok){total+=Number(item.data.summary?.to_recover||0);count+=Number(item.data.recoverable_count||item.data.summary?.recoverable_count||0)}else failed.push(item.day)}monthlyRecoverable[key]={loading:true,progress:Math.min(i+batch.length,days.length),total:days.length};renderMonthGrid()}if(failed.length===days.length){monthlyRecoverable[key]={error:true,message:'Todos os dias falharam'};renderMonthGrid();return}monthlyRecoverable[key]={loaded:true,to_recover:Number(total.toFixed(2)),count,partial:failed.length>0,failed_days:failed};renderMonthGrid()}
-async function loadRecoverableYear(year){if(monthlyLoading)return;monthlyLoading=true;recoverYear=Number(year);renderMonthGrid();const currentYM=lastClosedDay.slice(0,7),keys=[];for(let m=12;m>=1;m--){const key=monthKey(recoverYear,m);if(key<=currentYM&&!monthlyRecoverable[key]?.loaded)keys.push(key)}let done=0;for(const key of keys){await loadMonthSummary(key);done++;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+done+'/'+keys.length+' MESES'}monthlyLoading=false;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+recoverYear}
+async function loadRecoverableYear(year){const seq=++recoverYearSeq;monthlyLoading=true;recoverYear=Number(year);renderMonthGrid();const currentYM=lastClosedDay.slice(0,7),keys=[];for(let m=12;m>=1;m--){const key=monthKey(recoverYear,m);if(key<=currentYM&&!monthlyRecoverable[key]?.loaded)keys.push(key)}let done=0;for(const key of keys){if(seq!==recoverYearSeq)break;await loadMonthSummary(key);if(seq!==recoverYearSeq)break;done++;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+done+'/'+keys.length+' MESES'}if(seq===recoverYearSeq){monthlyLoading=false;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+recoverYear}}
 async function openRecoverMonth(key){selectedRecoverMonth=key;renderMonthGrid();const [y,m]=key.split('-').map(Number);const from=key+'-01',to=monthClosedEnd(y,m);document.querySelector('#finFrom').value=from;document.querySelector('#finTo').value=to;financialLoaded=false;await loadFinancial();monthlyRecoverable[key]={loaded:true,to_recover:Number(financialData.summary?.to_recover||0),count:Number(financialData.summary?.recoverable_count||financialData.recoverable_rows?.length||0),partial:!!financialData.partial};renderMonthGrid();renderDiv()}
 function finEventLabel(r){if(r.event_type==='1'&&r.transaction_type==='1')return '<span class="pill ok">Liquidação</span>';return '<span class="pill warn">Evento '+(r.event_type||'—')+'</span>'}
 function finTr(r){const d=r.settlement_difference_amount;return '<tr><td>'+String(r.movement_date||'')+'</td><td>'+(r.transaction_id||'—')+'</td><td>'+(r.brand||r.provider_brand||'—')+'</td><td>'+r.payment_method+'</td><td>'+r.installment+'/'+r.installments+'</td><td>'+money(r.gross_amount)+'</td><td>'+money(r.expected_settlement_amount)+'</td><td>'+money(r.settled_amount)+'</td><td class="'+(Number(d)>0?'danger':'')+'">'+money(d)+'</td><td>'+finEventLabel(r)+'</td></tr>'}
 function renderFinancial(){const s=financialData.summary||{};document.querySelector('#finCards').innerHTML=[['Liquidado no período',money(s.total_settled),(s.settlement_count||0)+' movimentos de liquidação'],['Taxas no financeiro',money(s.total_fees),'taxa + tarifa EDI'],['Deveria liquidar',money(s.expected_comparable),(s.comparable_count||0)+' operações comparáveis'],['Liquidou',money(s.actual_comparable),'mesmas operações comparáveis'],['A recuperar',money(s.to_recover),'diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const rows=financialData.rows||[],pages=Math.max(1,Math.ceil(rows.length/FIN_SIZE));if(finPage>pages)finPage=pages;const start=(finPage-1)*FIN_SIZE;document.querySelector('#finRows').innerHTML=rows.slice(start,start+FIN_SIZE).map(finTr).join('')||'<tr><td colspan="10" class="muted">Nenhum movimento financeiro no período.</td></tr>';document.querySelector('#finPageInfo').textContent='Página '+finPage+' de '+pages+' • '+rows.length+' movimentos exibidos';document.querySelector('#finPrev').disabled=finPage<=1;document.querySelector('#finNext').disabled=finPage>=pages}
 async function loadFinancial(){
+  const seq=++financialLoadSeq;
   let f=document.querySelector('#finFrom').value,t=document.querySelector('#finTo').value;
   const notice=document.querySelector('#finNotice'),button=document.querySelector('#loadFinancial');
   if(t>lastClosedDay){t=lastClosedDay;document.querySelector('#finTo').value=t}
@@ -556,58 +557,61 @@ async function loadFinancial(){
   notice.innerHTML='<b>Carregando EDI financeiro:</b> 0 de '+days.length+' dias.';
   document.querySelector('#finPeriodLabel').textContent='Consultando '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
   if(['recv','div'].includes(currentPage()))document.querySelector('#status').textContent='FINANCEIRO • 0/'+days.length+' DIAS';
-  financialData={rows:[],recoverable_rows:[],summary:emptyFinancialSummary(),range:{from:f,to:t},loading:true,progress:0,total_days:days.length};
+
+  const localData={rows:[],recoverable_rows:[],summary:emptyFinancialSummary(),range:{from:f,to:t},loading:true,progress:0,total_days:days.length,partial:false,failed_days:[]};
+  financialData=localData;
+  financialLoaded=false;
   finPage=1;divPage=1;renderFinancial();renderDiv();
+
   const failed=[];
   let completed=0;
-  const concurrency=1;
-  for(let i=0;i<days.length;i+=concurrency){
-    const batch=days.slice(i,i+concurrency);
-    const results=await Promise.all(batch.map(async dayValue=>{
-      try{
-        const r=await api('/api/financial-day?day='+encodeURIComponent(dayValue));
-        const j=await r.json().catch(()=>({}));
-        if(!r.ok||!j.ok)throw new Error(j.message||'Falha EDI');
-        return {ok:true,data:j};
-      }catch(e){return {ok:false,day:dayValue,message:e?.message||String(e)}}
-    }));
-    for(const item of results){
-      completed++;
-      if(!item.ok){failed.push({day:item.day,message:item.message});continue}
-      const j=item.data;
-      addFinancialSummary(financialData.summary,{...(j.summary||{}),recoverable_count:Number(j.recoverable_count||0)});
-      financialData.rows.push(...(j.rows||[]));
-      financialData.recoverable_rows.push(...(j.recoverable_rows||[]));
+  for(const dayValue of days){
+    if(seq!==financialLoadSeq)return;
+    try{
+      const j=await fetchFinancialDayWithRetry(dayValue);
+      if(seq!==financialLoadSeq)return;
+      addFinancialSummary(localData.summary,{...(j.summary||{}),recoverable_count:Number(j.recoverable_count||0)});
+      localData.rows.push(...(j.rows||[]));
+      localData.recoverable_rows.push(...(j.recoverable_rows||[]));
+    }catch(e){
+      if(seq!==financialLoadSeq)return;
+      failed.push({day:dayValue,message:e?.message||String(e)});
     }
-    financialData.progress=completed;
-    financialData.rows=financialData.rows.sort((a,b)=>String(b.movement_date).localeCompare(String(a.movement_date))).slice(0,1000);
-    financialData.recoverable_rows=financialData.recoverable_rows.sort((a,b)=>Number(b.settlement_difference_amount||0)-Number(a.settlement_difference_amount||0)).slice(0,500);
-    renderFinancial();renderDiv();
-    notice.innerHTML='<b>Carregando EDI financeiro:</b> '+completed+' de '+days.length+' dias'+(failed.length?' • '+failed.length+' com falha':'')+'.';
-    if(['recv','div'].includes(currentPage()))document.querySelector('#status').textContent='FINANCEIRO • '+completed+'/'+days.length+' DIAS';
+    completed++;
+    localData.progress=completed;
+    localData.rows=localData.rows.sort((a,b)=>String(b.movement_date).localeCompare(String(a.movement_date))).slice(0,1000);
+    localData.recoverable_rows=localData.recoverable_rows.sort((a,b)=>Number(b.settlement_difference_amount||0)-Number(a.settlement_difference_amount||0)).slice(0,500);
+    if(seq===financialLoadSeq){renderFinancial();renderDiv();notice.innerHTML='<b>Carregando EDI financeiro:</b> '+completed+' de '+days.length+' dias'+(failed.length?' • '+failed.length+' com falha':'')+'.';if(['recv','div'].includes(currentPage()))document.querySelector('#status').textContent='FINANCEIRO • '+completed+'/'+days.length+' DIAS'}
   }
-  if(failed.length){
+
+  if(failed.length&&seq===financialLoadSeq){
     const retryDays=[...failed.map(x=>x.day)];
     failed.length=0;
     for(const dayValue of retryDays){
+      if(seq!==financialLoadSeq)return;
       try{
         await new Promise(resolve=>setTimeout(resolve,1200));
         const j=await fetchFinancialDayWithRetry(dayValue);
-        addFinancialSummary(financialData.summary,{...(j.summary||{}),recoverable_count:Number(j.recoverable_count||0)});
-        financialData.rows.push(...(j.rows||[]));
-        financialData.recoverable_rows.push(...(j.recoverable_rows||[]));
+        if(seq!==financialLoadSeq)return;
+        addFinancialSummary(localData.summary,{...(j.summary||{}),recoverable_count:Number(j.recoverable_count||0)});
+        localData.rows.push(...(j.rows||[]));
+        localData.recoverable_rows.push(...(j.recoverable_rows||[]));
       }catch(e){
+        if(seq!==financialLoadSeq)return;
         failed.push({day:dayValue,message:e?.message||String(e)});
       }
     }
-    financialData.rows=financialData.rows.sort((a,b)=>String(b.movement_date).localeCompare(String(a.movement_date))).slice(0,1000);
-    financialData.recoverable_rows=financialData.recoverable_rows.sort((a,b)=>Number(b.settlement_difference_amount||0)-Number(a.settlement_difference_amount||0)).slice(0,500);
-    renderFinancial();renderDiv();
+    localData.rows=localData.rows.sort((a,b)=>String(b.movement_date).localeCompare(String(a.movement_date))).slice(0,1000);
+    localData.recoverable_rows=localData.recoverable_rows.sort((a,b)=>Number(b.settlement_difference_amount||0)-Number(a.settlement_difference_amount||0)).slice(0,500);
   }
+
+  if(seq!==financialLoadSeq)return;
+  localData.loading=false;
+  localData.partial=failed.length>0;
+  localData.failed_days=failed;
+  financialData=localData;
   financialLoaded=true;
-  financialData.loading=false;
-  financialData.partial=failed.length>0;
-  financialData.failed_days=failed;
+  renderFinancial();renderDiv();
   document.querySelector('#finPeriodLabel').textContent='Período carregado: '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
   if(failed.length){
     notice.style.display='block';
@@ -615,13 +619,14 @@ async function loadFinancial(){
   }else{
     notice.style.display='none';notice.textContent='';
   }
-  if(currentPage()==='recv')document.querySelector('#status').textContent='FINANCEIRO • '+(financialData.summary?.settlement_count||0)+' MOVIMENTOS';
-  if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+money(financialData.summary?.to_recover||0);
+  if(currentPage()==='recv')document.querySelector('#status').textContent='FINANCEIRO • '+(localData.summary?.settlement_count||0)+' MOVIMENTOS';
+  if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+money(localData.summary?.to_recover||0);
   button.disabled=false;
 }
 function render(){const s=data.summary||{};const pend=(s.parcel_pending_count||0)+(s.unresolved_count||0),loadingNote=data.loading?((data.progress||0)+'/'+(data.total_days||0)+' dias carregados'):(s.total_rows||0)+' transações';document.querySelector('#cards').innerHTML=[['Total transacionado',money(s.gross),loadingNote],['PagBank deveria pagar',money(s.expected_net),pend?pend+' transações ainda sem cálculo':'valor pelo contrato'],['PagBank pagou',money(s.comparable_pagbank_net),'mesmas transações calculadas'],['Diferença',money(s.net_difference),Number(s.net_difference)>0?'faltou o PagBank pagar':(Number(s.net_difference)<0?'PagBank pagou a mais':'valores iguais'),Number(s.net_difference)>0?'hot':''],['A recuperar',money(s.to_recover),'soma das diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const calc=data.rows.filter(r=>r.difference_amount!=null).sort((a,b)=>Math.abs(b.difference_amount)-Math.abs(a.difference_amount));document.querySelector('#topRows').innerHTML=calc.slice(0,6).map(topTr).join('')||'<tr><td colspan="10" class="muted">Sem diferenças calculáveis.</td></tr>';renderConc();renderDiv()}
 function showDetail(id){const r=data.rows.find(x=>String(x.transaction_id)===String(id));if(!r)return;document.querySelector('#detailTitle').textContent=r.transaction_id;const items=[['Data',String(r.occurred_at||'').replace('T',' ')],['Bandeira',r.brand||r.provider_brand||'—'],['Fonte da bandeira',r.brand_source||'—'],['Modalidade',r.payment_method],['Parcelas',r.installments+'x'],['Bruto',money(r.gross_amount)],['Taxa do contrato',pct(r.contract_base_rate)],['Acréscimo parcelado',r.parcel_monthly_rate?'1,55%/mês':'—'],['Taxa que deveria descontar',money(r.expected_base_fee_amount)],['Taxa que o PagBank descontou',money(r.provider_fee_amount)],['PagBank deveria pagar',money(r.expected_net_amount)],['PagBank pagou',money(r.net_amount)],['Diferença',money(r.difference_amount)],['BIN/IIN',r.card_bin||'—'],['Final cartão',r.last4||'—'],['PDV',r.serial_number||'—']];document.querySelector('#detailGrid').innerHTML=items.map(x=>'<div class="detail"><span>'+x[0]+'</span><b title="'+String(x[1]).replaceAll('"','&quot;')+'">'+x[1]+'</b></div>').join('');document.querySelector('#detailModal').classList.remove('hide')}
 async function load(){
+  const seq=++transactionLoadSeq;
   let f=document.querySelector('#from').value,t=document.querySelector('#to').value;
   const notice=document.querySelector('#queryNotice'),button=document.querySelector('#load');
   if(t>lastClosedDay){t=lastClosedDay;document.querySelector('#to').value=t}
@@ -633,67 +638,64 @@ async function load(){
   document.querySelector('#periodLabel').textContent='Consultando '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
   notice.style.display='block';
   notice.innerHTML='<b>Carregando EDI transacional:</b> 0 de '+days.length+' dias.';
-  data={rows:[],summary:emptyTransactionSummary(),range:{from:f,to:t},loading:true,progress:0,total_days:days.length};
+
+  const localData={rows:[],summary:emptyTransactionSummary(),range:{from:f,to:t},loading:true,progress:0,total_days:days.length,partial:false,failed_days:[]};
+  data=localData;
   concPage=1;render();
 
   const failed=[];
   let completed=0;
-
   for(const dayValue of days){
+    if(seq!==transactionLoadSeq)return;
     try{
       const j=await fetchTransactionDayWithRetry(dayValue);
-      addTransactionSummary(data.summary,j.summary||{});
-      data.rows.push(...(j.rows||[]));
+      if(seq!==transactionLoadSeq)return;
+      addTransactionSummary(localData.summary,j.summary||{});
+      localData.rows.push(...(j.rows||[]));
       const seen=new Set();
-      data.rows=data.rows.filter(r=>{const k=String(r.transaction_id||'');if(seen.has(k))return false;seen.add(k);return true})
-        .sort((a,b)=>{const ad=Math.abs(Number(a.difference_amount??-1)),bd=Math.abs(Number(b.difference_amount??-1));if(bd!==ad)return bd-ad;return String(b.occurred_at).localeCompare(String(a.occurred_at))})
-        .slice(0,500);
+      localData.rows=localData.rows.filter(r=>{const k=String(r.transaction_id||'');if(seen.has(k))return false;seen.add(k);return true}).sort((a,b)=>{const ad=Math.abs(Number(a.difference_amount??-1)),bd=Math.abs(Number(b.difference_amount??-1));if(bd!==ad)return bd-ad;return String(b.occurred_at).localeCompare(String(a.occurred_at))}).slice(0,500);
     }catch(e){
+      if(seq!==transactionLoadSeq)return;
       failed.push({day:dayValue,message:e?.message||String(e)});
     }
     completed++;
-    data.progress=completed;
-    render();
-    notice.innerHTML='<b>Carregando EDI transacional:</b> '+completed+' de '+days.length+' dias'+(failed.length?' • '+failed.length+' com falha':'')+'.';
-    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='TRANSAÇÕES • '+completed+'/'+days.length+' DIAS';
+    localData.progress=completed;
+    if(seq===transactionLoadSeq){render();notice.innerHTML='<b>Carregando EDI transacional:</b> '+completed+' de '+days.length+' dias'+(failed.length?' • '+failed.length+' com falha':'')+'.';if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='TRANSAÇÕES • '+completed+'/'+days.length+' DIAS'}
   }
 
-  if(failed.length){
+  if(failed.length&&seq===transactionLoadSeq){
     const retryDays=[...failed.map(x=>x.day)];
     failed.length=0;
     for(const dayValue of retryDays){
+      if(seq!==transactionLoadSeq)return;
       try{
         await new Promise(resolve=>setTimeout(resolve,1200));
         const j=await fetchTransactionDayWithRetry(dayValue);
-        addTransactionSummary(data.summary,j.summary||{});
-        data.rows.push(...(j.rows||[]));
+        if(seq!==transactionLoadSeq)return;
+        addTransactionSummary(localData.summary,j.summary||{});
+        localData.rows.push(...(j.rows||[]));
       }catch(e){
+        if(seq!==transactionLoadSeq)return;
         failed.push({day:dayValue,message:e?.message||String(e)});
       }
     }
-    const seen=new Set();
-    data.rows=data.rows.filter(r=>{const k=String(r.transaction_id||'');if(seen.has(k))return false;seen.add(k);return true})
-      .sort((a,b)=>{const ad=Math.abs(Number(a.difference_amount??-1)),bd=Math.abs(Number(b.difference_amount??-1));if(bd!==ad)return bd-ad;return String(b.occurred_at).localeCompare(String(a.occurred_at))})
-      .slice(0,500);
   }
 
-  data.loading=false;
-  data.partial=failed.length>0;
-  data.failed_days=failed;
+  if(seq!==transactionLoadSeq)return;
+  localData.loading=false;
+  localData.partial=failed.length>0;
+  localData.failed_days=failed;
+  data=localData;
   render();
   document.querySelector('#periodLabel').textContent='Período carregado: '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');
-
   if(failed.length){
     notice.style.display='block';
     notice.innerHTML='<b>Consulta parcial.</b> '+failed.length+' dia(s) ainda falharam: '+failed.map(x=>x.day.split('-').reverse().join('/')).join(', ')+'.';
-    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='PARCIAL • '+(data.summary?.total_rows||0)+' TRANSAÇÕES';
+    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='PARCIAL • '+(localData.summary?.total_rows||0)+' TRANSAÇÕES';
   }else{
     notice.style.display='none';notice.textContent='';
-    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='EDI DIRETO • '+(data.summary?.total_rows||0)+' TRANSAÇÕES';
-    if((data.summary?.total_rows||0)===0){
-      notice.style.display='block';
-      notice.innerHTML='<b>Sem movimentos no EDI neste período.</b>';
-    }
+    if(['dash','conc'].includes(currentPage()))document.querySelector('#status').textContent='EDI DIRETO • '+(localData.summary?.total_rows||0)+' TRANSAÇÕES';
+    if((localData.summary?.total_rows||0)===0){notice.style.display='block';notice.innerHTML='<b>Sem movimentos no EDI neste período.</b>'}
   }
   button.disabled=false;
 }
@@ -703,9 +705,10 @@ document.querySelector('#concPrev').onclick=()=>{if(concPage>1){concPage--;rende
 document.querySelector('#concNext').onclick=()=>{concPage++;renderConc()};
 document.querySelector('#divPrev').onclick=()=>{if(divPage>1){divPage--;renderDiv()}};
 document.querySelector('#divNext').onclick=()=>{divPage++;renderDiv()};
-document.querySelector('#recoverYear').onchange=e=>{recoverYear=Number(e.target.value);selectedRecoverMonth=null;financialData={rows:[],recoverable_rows:[],summary:{}};renderDiv();renderMonthGrid();loadRecoverableYear(recoverYear)};
+document.querySelector('#recoverYear').onchange=e=>{recoverYearSeq++;financialLoadSeq++;recoverYear=Number(e.target.value);selectedRecoverMonth=null;financialData={rows:[],recoverable_rows:[],summary:{}};renderDiv();renderMonthGrid();loadRecoverableYear(recoverYear)};
 document.querySelector('#monthGrid').onclick=e=>{const card=e.target.closest('[data-month]');if(card&&!card.disabled)openRecoverMonth(card.dataset.month)};
 document.querySelector('#loadFinancial').onclick=loadFinancial;
+['finFrom','finTo'].forEach(id=>document.querySelector('#'+id).addEventListener('change',()=>{financialLoadSeq++;financialLoaded=false;financialData={rows:[],recoverable_rows:[],summary:emptyFinancialSummary()};renderFinancial();document.querySelector('#finPeriodLabel').textContent='Período alterado — clique em Atualizar recebimentos';document.querySelector('#finNotice').style.display='none';document.querySelector('#status').textContent='PERÍODO ALTERADO'}));
 document.querySelector('#finPrev').onclick=()=>{if(finPage>1){finPage--;renderFinancial()}};
 document.querySelector('#finNext').onclick=()=>{finPage++;renderFinancial()};
 document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailModal').classList.add('hide');
@@ -719,7 +722,7 @@ api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){do
 </script></body></html>`;
 
 app.get("/", () => html(PAGE, 200, { "cache-control": "no-store" }));
-app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.7.0" }));
+app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.8.0" }));
 app.get("/api/session", async (ctx) => json({ authenticated: await hasSession(ctx.req) }));
 
 app.post("/api/login", async (ctx) => {
