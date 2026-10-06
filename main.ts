@@ -155,10 +155,18 @@ async function ediPage(user: string, token: string, day: string, page: number, p
   const auth = btoa(user + ":" + token);
   const url = `${EDI_BASE}/${movement}/${day}?pageNumber=${page}&pageSize=${pageSize}`;
   let response: Response | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    response = await fetch(url, { headers: { Authorization: "Basic " + auth, Accept: "application/json" } });
-    if (![429, 500, 502, 503, 504].includes(response.status)) break;
-    await new Promise((resolve) => setTimeout(resolve, 450 * (attempt + 1)));
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      response = await fetch(url, { headers: { Authorization: "Basic " + auth, Accept: "application/json" } });
+    } catch (error) {
+      if (attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      continue;
+    }
+    if (![408, 429, 500, 502, 503, 504].includes(response.status)) break;
+    const retryAfter = Number(response.headers.get("retry-after") || 0);
+    const waitMs = retryAfter > 0 ? retryAfter * 1000 : 1000 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
   if (!response) throw new Error("PagBank EDI sem resposta.");
@@ -183,7 +191,7 @@ async function ediDay(user: string, token: string, day: string) {
   if (first.validated === false) return { day, available: true, validated: false, rows: [], received: first.details.length };
 
   const pages = [first];
-  const pageConcurrency = 5;
+  const pageConcurrency = 2;
   for (let startPage = 2; startPage <= first.totalPages; startPage += pageConcurrency) {
     const pageNumbers = Array.from(
       { length: Math.min(pageConcurrency, first.totalPages - startPage + 1) },
@@ -225,7 +233,8 @@ function normalizeFinancial(row: Record<string, unknown>, day: string) {
   const rate = baseRate(resolved.brand, method, installments);
   const parcelled = method === "CREDIT" && installments > 1;
   const comparable = eventType === "1" && transactionType === "1" && !parcelled && rate !== null && gross > 0;
-  const expected = comparable ? round2(gross - gross * Number(rate) / 100) : null;
+  const expectedFee = comparable ? round2(gross * Number(rate) / 100) : null;
+  const expected = expectedFee === null ? null : round2(gross - expectedFee);
   const difference = expected === null ? null : round2(expected - settled);
 
   return {
@@ -249,6 +258,7 @@ function normalizeFinancial(row: Record<string, unknown>, day: string) {
     tariff_amount: round2(tariff),
     total_fee_amount: round2(intermediation + tariff),
     contract_rate: rate,
+    expected_fee_amount: expectedFee,
     expected_settlement_amount: expected,
     settlement_difference_amount: difference,
     comparable,
@@ -262,7 +272,7 @@ async function financialDay(user: string, token: string, day: string) {
   if (first.validated === false) return { day, available: true, validated: false, rows: [], received: first.details.length };
 
   const pages = [first];
-  const pageConcurrency = 5;
+  const pageConcurrency = 2;
   for (let startPage = 2; startPage <= first.totalPages; startPage += pageConcurrency) {
     const pageNumbers = Array.from(
       { length: Math.min(pageConcurrency, first.totalPages - startPage + 1) },
@@ -301,7 +311,7 @@ function summarizeFinancial(rows: any[]) {
     settlement_count: normal.length,
     adjustment_count: rows.length - normal.length,
     comparable_count: comparable.length,
-    recoverable_count: comparable.filter((r) => Number(r.settlement_difference_amount || 0) > 0).length,
+    recoverable_count: comparable.filter((r) => Number(r.settlement_difference_amount || 0) >= 0.01).length,
     total_settled: round2(totalSettled),
     total_fees: round2(totalFees),
     expected_comparable: round2(expected),
@@ -493,7 +503,7 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 
 <section id="rates" class="page"><div class="note"><b>Para que serve esta página:</b> estas são as taxas do contrato usadas para calcular quanto o PagBank deveria descontar em cada venda. O sistema escolhe a taxa pela forma de pagamento, bandeira e número de parcelas.</div><div id="rateGrid" class="rates"></div></section>
 
-<section id="div" class="page"><div class="panel"><div class="month-toolbar"><div><div class="ey">VALORES A RECUPERAR • MÊS A MÊS</div><h3 style="margin:3px 0!important">Quanto o PagBank deixou de liquidar corretamente</h3></div><select id="recoverYear" class="input" style="width:92px"></select></div><div id="monthGrid" class="month-grid"></div><div id="divPeriod" class="muted small" style="margin-bottom:7px">Clique em um mês para ver as transações que formam o valor.</div><div class="audit-head"><span>Transação</span><span>Vendido</span><span>Deveria liquidar</span><span>Liquidado</span><span>Diferença</span></div><div id="divergences" class="audit-list"></div><div class="pager"><span id="divPageInfo" class="pagerInfo"></span><div><button id="divPrev" class="btn">Anterior</button> <button id="divNext" class="btn">Próxima</button></div></div></div></section>
+<section id="div" class="page"><div class="panel"><div class="month-toolbar"><div><div class="ey">VALORES A RECUPERAR • MÊS A MÊS</div><h3 style="margin:3px 0!important">Diferenças reais após arredondamento das taxas em centavos</h3></div><select id="recoverYear" class="input" style="width:92px"></select></div><div id="monthGrid" class="month-grid"></div><div id="divPeriod" class="muted small" style="margin-bottom:7px">Clique em um mês para ver as transações que formam o valor.</div><div class="audit-head"><span>Transação</span><span>Vendido</span><span>Deveria liquidar</span><span>Liquidado</span><span>Diferença</span></div><div id="divergences" class="audit-list"></div><div class="pager"><span id="divPageInfo" class="pagerInfo"></span><div><button id="divPrev" class="btn">Anterior</button> <button id="divNext" class="btn">Próxima</button></div></div></div></section>
 </main></div>
 <div id="detailModal" class="modal hide"><div class="modal-card"><div class="modal-head"><div><div class="ey">DETALHES DA TRANSAÇÃO</div><b id="detailTitle"></b></div><button id="detailClose" class="btn">Fechar</button></div><div id="detailGrid" class="detail-grid"></div></div></div>
 
@@ -523,8 +533,8 @@ function renderDiv(){const rows=(financialData.recoverable_rows||[]);const pages
 function monthKey(year,month){return year+'-'+String(month).padStart(2,'0')}
 function monthClosedEnd(year,month){const last=new Date(Date.UTC(year,month,0)).toISOString().slice(0,10);return last>lastClosedDay?lastClosedDay:last}
 function renderMonthGrid(){const currentYM=lastClosedDay.slice(0,7);let html='';for(let m=1;m<=12;m++){const key=monthKey(recoverYear,m),entry=monthlyRecoverable[key],future=key>currentYM,active=selectedRecoverMonth===key;let value='—',sub=future?'Ainda não fechado':'Aguardando cálculo';if(entry?.loading){value='…';sub='Calculando '+(entry.progress||0)+'/'+(entry.total||0)+' dias'}else if(entry?.loaded){value=money(entry.to_recover||0);sub=(entry.count||0)+' divergência'+((entry.count||0)===1?'':'s')+(entry.partial?' • parcial':'')}else if(entry?.error){value='—';sub='Clique para tentar novamente'}html+='<button class="month-card '+(future?'future ':'')+(active?'active':'')+'" data-month="'+key+'" '+(future?'disabled':'')+'><span class="mname">'+MONTH_NAMES[m-1]+'</span><strong>'+value+'</strong><small>'+sub+'</small></button>'}document.querySelector('#monthGrid').innerHTML=html}
-async function fetchFinancialDayWithRetry(dayValue){let lastError='Falha EDI';for(let attempt=0;attempt<3;attempt++){try{const r=await api('/api/financial-day?day='+encodeURIComponent(dayValue));const j=await r.json().catch(()=>({}));if(r.ok&&j.ok)return j;lastError=j.message||('HTTP '+r.status)}catch(e){lastError=e?.message||String(e)}if(attempt<2)await new Promise(resolve=>setTimeout(resolve,500*(attempt+1)))}throw new Error(lastError)}
-async function loadMonthSummary(key){if(monthlyRecoverable[key]?.loading||monthlyRecoverable[key]?.loaded)return;const [y,m]=key.split('-').map(Number),from=key+'-01',to=monthClosedEnd(y,m),days=isoDays(from,to);if(!days.length)return;monthlyRecoverable[key]={loading:true,progress:0,total:days.length};renderMonthGrid();let total=0,count=0,failed=[];const concurrency=3;for(let i=0;i<days.length;i+=concurrency){const batch=days.slice(i,i+concurrency);const results=await Promise.all(batch.map(async dayValue=>{try{return {ok:true,data:await fetchFinancialDayWithRetry(dayValue),day:dayValue}}catch(e){return {ok:false,day:dayValue,message:e?.message||String(e)}}}));for(const item of results){if(item.ok){total+=Number(item.data.summary?.to_recover||0);count+=Number(item.data.recoverable_count||item.data.summary?.recoverable_count||0)}else failed.push(item.day)}monthlyRecoverable[key]={loading:true,progress:Math.min(i+batch.length,days.length),total:days.length};renderMonthGrid()}if(failed.length===days.length){monthlyRecoverable[key]={error:true,message:'Todos os dias falharam'};renderMonthGrid();return}monthlyRecoverable[key]={loaded:true,to_recover:Number(total.toFixed(2)),count,partial:failed.length>0,failed_days:failed};renderMonthGrid()}
+async function fetchFinancialDayWithRetry(dayValue){let lastError='Falha EDI';for(let attempt=0;attempt<5;attempt++){try{const r=await api('/api/financial-day?day='+encodeURIComponent(dayValue));const j=await r.json().catch(()=>({}));if(r.ok&&j.ok)return j;lastError=j.message||('HTTP '+r.status)}catch(e){lastError=e?.message||String(e)}if(attempt<4)await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)))}throw new Error(lastError)}
+async function loadMonthSummary(key){if(monthlyRecoverable[key]?.loading||monthlyRecoverable[key]?.loaded)return;const [y,m]=key.split('-').map(Number),from=key+'-01',to=monthClosedEnd(y,m),days=isoDays(from,to);if(!days.length)return;monthlyRecoverable[key]={loading:true,progress:0,total:days.length};renderMonthGrid();let total=0,count=0,failed=[];const concurrency=1;for(let i=0;i<days.length;i+=concurrency){const batch=days.slice(i,i+concurrency);const results=await Promise.all(batch.map(async dayValue=>{try{return {ok:true,data:await fetchFinancialDayWithRetry(dayValue),day:dayValue}}catch(e){return {ok:false,day:dayValue,message:e?.message||String(e)}}}));for(const item of results){if(item.ok){total+=Number(item.data.summary?.to_recover||0);count+=Number(item.data.recoverable_count||item.data.summary?.recoverable_count||0)}else failed.push(item.day)}monthlyRecoverable[key]={loading:true,progress:Math.min(i+batch.length,days.length),total:days.length};renderMonthGrid()}if(failed.length===days.length){monthlyRecoverable[key]={error:true,message:'Todos os dias falharam'};renderMonthGrid();return}monthlyRecoverable[key]={loaded:true,to_recover:Number(total.toFixed(2)),count,partial:failed.length>0,failed_days:failed};renderMonthGrid()}
 async function loadRecoverableYear(year){if(monthlyLoading)return;monthlyLoading=true;recoverYear=Number(year);renderMonthGrid();const currentYM=lastClosedDay.slice(0,7),keys=[];for(let m=12;m>=1;m--){const key=monthKey(recoverYear,m);if(key<=currentYM&&!monthlyRecoverable[key]?.loaded)keys.push(key)}let done=0;for(const key of keys){await loadMonthSummary(key);done++;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+done+'/'+keys.length+' MESES'}monthlyLoading=false;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+recoverYear}
 async function openRecoverMonth(key){selectedRecoverMonth=key;renderMonthGrid();const [y,m]=key.split('-').map(Number);const from=key+'-01',to=monthClosedEnd(y,m);document.querySelector('#finFrom').value=from;document.querySelector('#finTo').value=to;financialLoaded=false;await loadFinancial();monthlyRecoverable[key]={loaded:true,to_recover:Number(financialData.summary?.to_recover||0),count:Number(financialData.summary?.recoverable_count||financialData.recoverable_rows?.length||0),partial:!!financialData.partial};renderMonthGrid();renderDiv()}
 function finEventLabel(r){if(r.event_type==='1'&&r.transaction_type==='1')return '<span class="pill ok">Liquidação</span>';return '<span class="pill warn">Evento '+(r.event_type||'—')+'</span>'}
@@ -546,7 +556,7 @@ async function loadFinancial(){
   finPage=1;divPage=1;renderFinancial();renderDiv();
   const failed=[];
   let completed=0;
-  const concurrency=3;
+  const concurrency=1;
   for(let i=0;i<days.length;i+=concurrency){
     const batch=days.slice(i,i+concurrency);
     const results=await Promise.all(batch.map(async dayValue=>{
@@ -571,6 +581,24 @@ async function loadFinancial(){
     renderFinancial();renderDiv();
     notice.innerHTML='<b>Carregando EDI financeiro:</b> '+completed+' de '+days.length+' dias'+(failed.length?' • '+failed.length+' com falha':'')+'.';
     if(['recv','div'].includes(currentPage()))document.querySelector('#status').textContent='FINANCEIRO • '+completed+'/'+days.length+' DIAS';
+  }
+  if(failed.length){
+    const retryDays=[...failed.map(x=>x.day)];
+    failed.length=0;
+    for(const dayValue of retryDays){
+      try{
+        await new Promise(resolve=>setTimeout(resolve,1200));
+        const j=await fetchFinancialDayWithRetry(dayValue);
+        addFinancialSummary(financialData.summary,{...(j.summary||{}),recoverable_count:Number(j.recoverable_count||0)});
+        financialData.rows.push(...(j.rows||[]));
+        financialData.recoverable_rows.push(...(j.recoverable_rows||[]));
+      }catch(e){
+        failed.push({day:dayValue,message:e?.message||String(e)});
+      }
+    }
+    financialData.rows=financialData.rows.sort((a,b)=>String(b.movement_date).localeCompare(String(a.movement_date))).slice(0,1000);
+    financialData.recoverable_rows=financialData.recoverable_rows.sort((a,b)=>Number(b.settlement_difference_amount||0)-Number(a.settlement_difference_amount||0)).slice(0,500);
+    renderFinancial();renderDiv();
   }
   financialLoaded=true;
   financialData.loading=false;
@@ -643,7 +671,7 @@ api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){do
 </script></body></html>`;
 
 app.get("/", () => html(PAGE, 200, { "cache-control": "no-store" }));
-app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.5.0" }));
+app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.6.0" }));
 app.get("/api/session", async (ctx) => json({ authenticated: await hasSession(ctx.req) }));
 
 app.post("/api/login", async (ctx) => {
@@ -696,7 +724,7 @@ app.get("/api/recoverable-month", async (ctx) => {
       const result = await financialDay(user, token, day);
       const allRows = result.rows || [];
       const summary = summarizeFinancial(allRows);
-      const recoverableRows = allRows.filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) > 0);
+      const recoverableRows = allRows.filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) >= 0.01);
       const payload = { ok: true, day, validated: result.validated, summary, recoverable_count: recoverableRows.length };
       if (result.validated === true) FINANCIAL_DAY_CACHE.set(day, { expires: Date.now() + 6 * 60 * 60 * 1000, payload });
       return payload;
@@ -750,7 +778,7 @@ app.get("/api/financial-day", async (ctx) => {
       .sort((a: any, b: any) => String(b.movement_date).localeCompare(String(a.movement_date)))
       .slice(0, 80);
     const recoverableRows = allRows
-      .filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) > 0)
+      .filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) >= 0.01)
       .sort((a: any, b: any) => Number(b.settlement_difference_amount || 0) - Number(a.settlement_difference_amount || 0))
       .slice(0, 80);
 
@@ -811,7 +839,7 @@ app.get("/api/financial", async (ctx) => {
     .sort((a: any, b: any) => String(b.movement_date).localeCompare(String(a.movement_date)))
     .slice(0, 1000);
   const recoverableRows = allRows
-    .filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) > 0)
+    .filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) >= 0.01)
     .sort((a: any, b: any) => Number(b.settlement_difference_amount || 0) - Number(a.settlement_difference_amount || 0))
     .slice(0, 500);
 
