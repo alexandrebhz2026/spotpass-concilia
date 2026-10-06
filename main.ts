@@ -149,9 +149,9 @@ function normalize(row: Record<string, unknown>, day: string) {
   };
 }
 
-async function ediPage(user: string, token: string, day: string, page: number, pageSize = 1000) {
+async function ediPage(user: string, token: string, day: string, page: number, pageSize = 1000, movement: "transactional" | "financial" = "transactional") {
   const auth = btoa(user + ":" + token);
-  const url = `${EDI_BASE}/transactional/${day}?pageNumber=${page}&pageSize=${pageSize}`;
+  const url = `${EDI_BASE}/${movement}/${day}?pageNumber=${page}&pageSize=${pageSize}`;
   let response: Response | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     response = await fetch(url, { headers: { Authorization: "Basic " + auth, Accept: "application/json" } });
@@ -205,6 +205,109 @@ async function ediDay(user: string, token: string, day: string) {
 
   return { day, available: true, validated: true, rows: unique, received: raw.length };
 }
+function normalizeFinancial(row: Record<string, unknown>, day: string) {
+  const method = paymentMethod(row);
+  const installments = Math.max(
+    1,
+    Math.round(n(pick(row, ["quantidade_parcelas", "numero_parcelas", "qtd_parcelas", "installments"]), 1)),
+  );
+  const installment = Math.max(1, Math.round(n(pick(row, ["parcela", "numero_parcela"]), 1)));
+  const resolved = resolveBrand(row, method);
+  const gross = n(pick(row, ["valor_original_transacao", "valor_total_transacao"]), 0);
+  const settled = n(pick(row, ["valor_parcela", "valor_liquido_transacao"]), 0);
+  const intermediation = n(pick(row, ["taxa_intermediacao"]), 0);
+  const tariff = n(pick(row, ["tarifa_intermediacao"]), 0);
+  const eventType = String(pick(row, ["tipo_evento"]) || "");
+  const transactionType = String(pick(row, ["tipo_transacao"]) || "");
+  const paymentStatus = String(pick(row, ["status_pagamento"]) || "");
+  const rate = baseRate(resolved.brand, method, installments);
+  const parcelled = method === "CREDIT" && installments > 1;
+  const comparable = eventType === "1" && transactionType === "1" && !parcelled && rate !== null && gross > 0;
+  const expected = comparable ? round2(gross - gross * Number(rate) / 100) : null;
+  const difference = expected === null ? null : round2(expected - settled);
+
+  return {
+    movement_id: String(pick(row, ["movimento_api_codigo"]) || crypto.randomUUID()).trim().toUpperCase(),
+    transaction_id: String(pick(row, ["codigo_transacao"]) || "").trim().toUpperCase() || null,
+    sale_code: String(pick(row, ["codigo_venda"]) || "").trim() || null,
+    movement_date: String(pick(row, ["data_movimentacao", "data_venda_ajuste"]) || day),
+    sale_date: String(pick(row, ["data_inicial_transacao"]) || "") || null,
+    expected_payment_date: String(pick(row, ["data_prevista_pagamento"]) || "") || null,
+    event_type: eventType || null,
+    transaction_type: transactionType || null,
+    payment_status: paymentStatus || null,
+    payment_method: method,
+    brand: resolved.brand,
+    provider_brand: String(pick(row, ["instituicao_financeira", "bandeira", "brand"]) || "").trim().toUpperCase() || null,
+    installments,
+    installment,
+    gross_amount: round2(gross),
+    settled_amount: round2(settled),
+    intermediation_fee_amount: round2(intermediation),
+    tariff_amount: round2(tariff),
+    total_fee_amount: round2(intermediation + tariff),
+    contract_rate: rate,
+    expected_settlement_amount: expected,
+    settlement_difference_amount: difference,
+    comparable,
+    edi_day: day,
+  };
+}
+
+async function financialDay(user: string, token: string, day: string) {
+  const first = await ediPage(user, token, day, 1, 1000, "financial");
+  if (!first.available) return { day, available: false, validated: null, rows: [], received: 0 };
+  if (first.validated === false) return { day, available: true, validated: false, rows: [], received: first.details.length };
+
+  const pages = [first];
+  const pageConcurrency = 5;
+  for (let startPage = 2; startPage <= first.totalPages; startPage += pageConcurrency) {
+    const pageNumbers = Array.from(
+      { length: Math.min(pageConcurrency, first.totalPages - startPage + 1) },
+      (_, i) => startPage + i,
+    );
+    const settled = await Promise.allSettled(
+      pageNumbers.map((p) => ediPage(user, token, day, p, 1000, "financial")),
+    );
+    for (const item of settled) {
+      if (item.status === "fulfilled") pages.push(item.value);
+      else throw item.reason;
+    }
+  }
+
+  const raw = pages.flatMap((p) => p.details);
+  const rows = raw.map((row) => normalizeFinancial(row, day));
+  const seen = new Set<string>();
+  const unique = rows.filter((row) => {
+    if (seen.has(row.movement_id)) return false;
+    seen.add(row.movement_id);
+    return true;
+  });
+  return { day, available: true, validated: true, rows: unique, received: raw.length };
+}
+
+function summarizeFinancial(rows: any[]) {
+  const normal = rows.filter((r) => r.event_type === "1" && r.transaction_type === "1");
+  const comparable = normal.filter((r) => r.comparable);
+  const totalSettled = normal.reduce((acc, r) => acc + Number(r.settled_amount || 0), 0);
+  const totalFees = normal.reduce((acc, r) => acc + Number(r.total_fee_amount || 0), 0);
+  const expected = comparable.reduce((acc, r) => acc + Number(r.expected_settlement_amount || 0), 0);
+  const actualComparable = comparable.reduce((acc, r) => acc + Number(r.settled_amount || 0), 0);
+  const toRecover = comparable.reduce((acc, r) => acc + Math.max(0, Number(r.settlement_difference_amount || 0)), 0);
+  return {
+    movement_count: rows.length,
+    settlement_count: normal.length,
+    adjustment_count: rows.length - normal.length,
+    comparable_count: comparable.length,
+    total_settled: round2(totalSettled),
+    total_fees: round2(totalFees),
+    expected_comparable: round2(expected),
+    actual_comparable: round2(actualComparable),
+    difference_comparable: round2(expected - actualComparable),
+    to_recover: round2(toRecover),
+  };
+}
+
 function daysBetween(from: string, to: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return [];
   const [fy, fm, fd] = from.split("-").map(Number);
@@ -367,7 +470,7 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 <div id="login" class="login"><form id="loginForm" class="loginbox"><div class="brand"><div class="mark"><svg viewBox="0 0 449 449"><rect width="449" height="449" fill="#F15613"/><path fill="#fff" d="M127 80 L112 91 L99 107 L90 125 L84 151 L84 304 L88 319 L87 321 L93 339 L107 360 L126 376 L150 386 L166 389 L256 390 L282 386 L304 377 L319 366 L331 353 L341 335 L346 320 L349 299 L348 171 L340 164 L282 164 L275 168 L272 174 L272 293 L269 306 L260 317 L244 323 L189 323 L174 318 L165 308 L161 290 L162 157 L165 148 L176 137 L191 133 L232 133 L239 129 L242 119 L241 75 L238 70 L233 67 L170 67 L146 72 L131 78 L131 80 Z"/><path fill="#fff" d="M275 56 L272 64 L272 124 L278 132 L283 134 L350 134 L359 130 L362 125 L362 120 L356 104 L343 86 L328 72 L300 56 L290 53 L281 53 Z"/></svg></div><div><b>SpotPass Concilia</b><small>acesso da equipe</small></div></div><div class="muted small">Use a senha interna do conciliador.</div><input id="password" type="password" placeholder="Senha"><div id="loginErr" class="small" style="color:#b93b4d;min-height:20px"></div><button class="btn primary" style="width:100%;height:42px">Entrar</button></form></div>
 
 <div class="app"><aside class="side"><div class="brand"><div class="mark"><svg viewBox="0 0 449 449"><rect width="449" height="449" fill="#F15613"/><path fill="#fff" d="M127 80 L112 91 L99 107 L90 125 L84 151 L84 304 L88 319 L87 321 L93 339 L107 360 L126 376 L150 386 L166 389 L256 390 L282 386 L304 377 L319 366 L331 353 L341 335 L346 320 L349 299 L348 171 L340 164 L282 164 L275 168 L272 174 L272 293 L269 306 L260 317 L244 323 L189 323 L174 318 L165 308 L161 290 L162 157 L165 148 L176 137 L191 133 L232 133 L239 129 L242 119 L241 75 L238 70 L233 67 L170 67 L146 72 L131 78 L131 80 Z"/><path fill="#fff" d="M275 56 L272 64 L272 124 L278 132 L283 134 L350 134 L359 130 L362 125 L362 120 L356 104 L343 86 L328 72 L300 56 L290 53 L281 53 Z"/></svg></div><div><b>SpotPass</b><small>Concilia</small></div></div><nav>
-<button class="active" data-page="dash">Visão geral</button><button data-page="conc">Transações</button><button data-page="rates">Taxas do contrato</button><button data-page="div">A recuperar</button>
+<button class="active" data-page="dash">Visão geral</button><button data-page="conc">Transações</button><button data-page="recv">Recebimentos PagBank</button><button data-page="rates">Taxas do contrato</button><button data-page="div">A recuperar</button>
 </nav></aside>
 
 <main class="main"><header class="top"><div><div class="ey">AUDITORIA DE ADQUIRÊNCIA</div><h1 id="title">Visão geral</h1></div><span id="status" class="status">ONLINE</span></header>
@@ -377,6 +480,13 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 <div id="cards" class="grid"></div><div class="panel"><div class="ey">TRANSAÇÃO A TRANSAÇÃO</div><h3 style="margin:5px 0 12px">Maiores diferenças calculáveis</h3><div class="tw"><table><thead><tr><th>Data</th><th>Transação</th><th>Bandeira</th><th>Modalidade</th><th>Parcelas</th><th>Valor vendido</th><th>PagBank deveria pagar</th><th>PagBank pagou</th><th>Diferença</th><th>Situação</th></tr></thead><tbody id="topRows"></tbody></table></div></div></section>
 
 <section id="conc" class="page"><div class="filters"><input id="search" class="input" style="width:260px" placeholder="Buscar transação ou bandeira"><span class="muted small"><b>Leitura:</b> comparamos quanto o PagBank deveria pagar pelo contrato com quanto realmente pagou. Clique em uma linha para abrir os detalhes.</span></div><div class="panel"><div class="tw"><table><thead><tr><th style="width:9%">Data</th><th style="width:13%">Transação</th><th style="width:9%">Bandeira</th><th style="width:7%">Pagamento</th><th style="width:6%">Parc.</th><th style="width:9%">Valor vendido</th><th style="width:7%">Taxa contrato</th><th style="width:11%">PagBank deveria pagar</th><th style="width:11%">PagBank pagou</th><th style="width:9%">Diferença</th><th style="width:9%">Situação</th></tr></thead><tbody id="allRows"></tbody></table></div><div class="pager"><span id="concPageInfo" class="pagerInfo"></span><div><button id="concPrev" class="btn">Anterior</button> <button id="concNext" class="btn">Próxima</button></div></div></div></section>
+
+<section id="recv" class="page">
+<div class="filters"><label class="muted small">De</label><input id="finFrom" class="input" type="date"><label class="muted small">Até</label><input id="finTo" class="input" type="date"><button id="loadFinancial" class="btn primary">Atualizar recebimentos</button><span id="finPeriodLabel" class="muted small"></span></div>
+<div id="finNotice" class="note" style="display:none"></div>
+<div id="finCards" class="grid"></div>
+<div class="panel"><div class="ey">EDI FINANCEIRO PAGBANK</div><h3>Liquidações e movimentos financeiros</h3><div class="muted small" style="margin-bottom:7px">Aqui usamos o arquivo <b>financial</b> do EDI PagBank. Ele mostra o que efetivamente entrou na liquidação, parcela por parcela.</div><div class="tw"><table><thead><tr><th style="width:10%">Movimento</th><th style="width:15%">Transação</th><th style="width:10%">Bandeira</th><th style="width:8%">Pagamento</th><th style="width:7%">Parcela</th><th style="width:10%">Venda</th><th style="width:11%">Deveria liquidar</th><th style="width:11%">Liquidado</th><th style="width:9%">Diferença</th><th style="width:9%">Evento</th></tr></thead><tbody id="finRows"></tbody></table></div><div class="pager"><span id="finPageInfo" class="pagerInfo"></span><div><button id="finPrev" class="btn">Anterior</button> <button id="finNext" class="btn">Próxima</button></div></div></div>
+</section>
 
 <section id="rates" class="page"><div class="note"><b>Para que serve esta página:</b> estas são as taxas do contrato usadas para calcular quanto o PagBank deveria descontar em cada venda. O sistema escolhe a taxa pela forma de pagamento, bandeira e número de parcelas.</div><div id="rateGrid" class="rates"></div></section>
 
@@ -388,9 +498,9 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 const money=v=>v==null?'—':new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(v||0));
 const pct=v=>v==null?'—':Number(v).toFixed(2).replace('.',',')+'%';
 const day=d=>{const x=new Date(d);return x.toISOString().slice(0,10)};
-const today=new Date(),y=new Date(today.getTime()-86400000);document.querySelector('#from').value=day(y);document.querySelector('#to').value=day(y);
-let data={rows:[],summary:{}},concPage=1,divPage=1;
-const PAGE_SIZE=8,DIV_SIZE=8;
+const today=new Date(),y=new Date(today.getTime()-86400000);document.querySelector('#from').value=day(y);document.querySelector('#to').value=day(y);document.querySelector('#finFrom').value=day(y);document.querySelector('#finTo').value=day(y);
+let data={rows:[],summary:{}},financialData={rows:[],summary:{}},concPage=1,divPage=1,finPage=1,financialLoaded=false;
+const PAGE_SIZE=8,DIV_SIZE=8,FIN_SIZE=8;
 async function api(url,opt){const r=await fetch(url,{credentials:'include',...(opt||{})});if(r.status===401)document.querySelector('#login').classList.remove('hide');return r}
 document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const r=await api('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#password').value})});const j=await r.json();if(!r.ok){document.querySelector('#loginErr').textContent=j.message||'Falha';return}document.querySelector('#login').classList.add('hide');load()};
 function pill(row){if(row.calculation_status==='PARCELAMENTO_AGUARDA_CALIBRACAO')return '<span class="pill warn">Regra parcelada pendente</span>';if(row.calculation_status==='TAXA_NAO_RESOLVIDA')return '<span class="pill warn">Taxa não identificada</span>';const d=Number(row.difference_amount||0);if(Math.abs(d)<.01)return '<span class="pill ok">Correto</span>';if(d>0)return '<span class="pill bad">Pagou menos</span>';return '<span class="pill ok">Pagou mais</span>'}
@@ -399,6 +509,10 @@ function compactTr(row){const d=row.difference_amount;return '<tr data-tx="'+row
 function filteredRows(){const q=(document.querySelector('#search').value||'').toLowerCase();return data.rows.filter(r=>!q||(r.transaction_id+' '+(r.brand||r.provider_brand||'')+' '+r.payment_method).toLowerCase().includes(q))}
 function renderConc(){const rows=filteredRows(),pages=Math.max(1,Math.ceil(rows.length/PAGE_SIZE));if(concPage>pages)concPage=pages;const start=(concPage-1)*PAGE_SIZE,slice=rows.slice(start,start+PAGE_SIZE);document.querySelector('#allRows').innerHTML=slice.map(compactTr).join('')||'<tr><td colspan="11" class="muted">Nenhuma transação.</td></tr>';document.querySelector('#concPageInfo').textContent='Página '+concPage+' de '+pages+' • '+rows.length+' transações';document.querySelector('#concPrev').disabled=concPage<=1;document.querySelector('#concNext').disabled=concPage>=pages}
 function renderDiv(){const rows=data.rows.filter(r=>r.difference_amount!=null&&Number(r.difference_amount)>0).sort((a,b)=>Number(b.difference_amount)-Number(a.difference_amount));const pages=Math.max(1,Math.ceil(rows.length/DIV_SIZE));if(divPage>pages)divPage=pages;const start=(divPage-1)*DIV_SIZE;document.querySelector('#divergences').innerHTML=rows.slice(start,start+DIV_SIZE).map(r=>'<div class="audit-item" data-tx="'+r.transaction_id+'"><b>'+r.transaction_id+' · '+(r.brand||'—')+'</b><span>'+money(r.gross_amount)+'</span><span>'+money(r.expected_net_amount)+'</span><span>'+money(r.net_amount)+'</span><span class="danger">'+money(r.difference_amount)+'</span></div>').join('')||'<div class="muted">Nenhuma transação com valor a recuperar neste período.</div>';document.querySelector('#divPageInfo').textContent='Página '+divPage+' de '+pages+' • '+rows.length+' divergências';document.querySelector('#divPrev').disabled=divPage<=1;document.querySelector('#divNext').disabled=divPage>=pages}
+function finEventLabel(r){if(r.event_type==='1'&&r.transaction_type==='1')return '<span class="pill ok">Liquidação</span>';return '<span class="pill warn">Evento '+(r.event_type||'—')+'</span>'}
+function finTr(r){const d=r.settlement_difference_amount;return '<tr><td>'+String(r.movement_date||'')+'</td><td>'+(r.transaction_id||'—')+'</td><td>'+(r.brand||r.provider_brand||'—')+'</td><td>'+r.payment_method+'</td><td>'+r.installment+'/'+r.installments+'</td><td>'+money(r.gross_amount)+'</td><td>'+money(r.expected_settlement_amount)+'</td><td>'+money(r.settled_amount)+'</td><td class="'+(Number(d)>0?'danger':'')+'">'+money(d)+'</td><td>'+finEventLabel(r)+'</td></tr>'}
+function renderFinancial(){const s=financialData.summary||{};document.querySelector('#finCards').innerHTML=[['Liquidado no período',money(s.total_settled),(s.settlement_count||0)+' liquidações'],['Taxas no financeiro',money(s.total_fees),'taxa + tarifa EDI'],['Deveria liquidar',money(s.expected_comparable),(s.comparable_count||0)+' operações comparáveis'],['Liquidou',money(s.actual_comparable),'mesmas operações comparáveis'],['A recuperar',money(s.to_recover),'diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const rows=financialData.rows||[],pages=Math.max(1,Math.ceil(rows.length/FIN_SIZE));if(finPage>pages)finPage=pages;const start=(finPage-1)*FIN_SIZE;document.querySelector('#finRows').innerHTML=rows.slice(start,start+FIN_SIZE).map(finTr).join('')||'<tr><td colspan="10" class="muted">Nenhum movimento financeiro no período.</td></tr>';document.querySelector('#finPageInfo').textContent='Página '+finPage+' de '+pages+' • '+rows.length+' movimentos exibidos';document.querySelector('#finPrev').disabled=finPage<=1;document.querySelector('#finNext').disabled=finPage>=pages}
+async function loadFinancial(){const f=document.querySelector('#finFrom').value,t=document.querySelector('#finTo').value,notice=document.querySelector('#finNotice');document.querySelector('#status').textContent='CARREGANDO FINANCEIRO...';document.querySelector('#finPeriodLabel').textContent='Consultando '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');notice.style.display='none';financialData={rows:[],summary:{}};finPage=1;renderFinancial();const r=await api('/api/financial?from='+encodeURIComponent(f)+'&to='+encodeURIComponent(t));const j=await r.json().catch(()=>({}));if(!r.ok){document.querySelector('#status').textContent='ERRO';notice.style.display='block';notice.innerHTML='<b>Não foi possível consultar o financeiro:</b> '+(j.message||'falha EDI.');return}financialData=j;financialLoaded=true;finPage=1;renderFinancial();document.querySelector('#finPeriodLabel').textContent='Período carregado: '+f.split('-').reverse().join('/')+' a '+t.split('-').reverse().join('/');if(j.partial){notice.style.display='block';notice.innerHTML='<b>Consulta parcial.</b> Alguns dias do EDI financeiro falharam: '+(j.failed_days||[]).map(x=>x.day.split('-').reverse().join('/')).join(', ');document.querySelector('#status').textContent='FINANCEIRO PARCIAL'}else document.querySelector('#status').textContent='FINANCEIRO • '+(j.summary?.settlement_count||0)+' LIQUIDAÇÕES'}
 function render(){const s=data.summary||{};const pend=(s.parcel_pending_count||0)+(s.unresolved_count||0);document.querySelector('#cards').innerHTML=[['Total transacionado',money(s.gross),(s.total_rows||0)+' transações'],['PagBank deveria pagar',money(s.expected_net),pend?pend+' transações ainda sem cálculo':'valor pelo contrato'],['PagBank pagou',money(s.comparable_pagbank_net),'mesmas transações calculadas'],['Diferença',money(s.net_difference),Number(s.net_difference)>0?'faltou o PagBank pagar':(Number(s.net_difference)<0?'PagBank pagou a mais':'valores iguais'),Number(s.net_difference)>0?'hot':''],['A recuperar',money(s.to_recover),'soma das diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const calc=data.rows.filter(r=>r.difference_amount!=null).sort((a,b)=>Math.abs(b.difference_amount)-Math.abs(a.difference_amount));document.querySelector('#topRows').innerHTML=calc.slice(0,6).map(topTr).join('')||'<tr><td colspan="10" class="muted">Sem diferenças calculáveis.</td></tr>';renderConc();renderDiv()}
 function showDetail(id){const r=data.rows.find(x=>String(x.transaction_id)===String(id));if(!r)return;document.querySelector('#detailTitle').textContent=r.transaction_id;const items=[['Data',String(r.occurred_at||'').replace('T',' ')],['Bandeira',r.brand||r.provider_brand||'—'],['Fonte da bandeira',r.brand_source||'—'],['Modalidade',r.payment_method],['Parcelas',r.installments+'x'],['Bruto',money(r.gross_amount)],['Taxa do contrato',pct(r.contract_base_rate)],['Acréscimo parcelado',r.parcel_monthly_rate?'1,55%/mês':'—'],['Taxa que deveria descontar',money(r.expected_base_fee_amount)],['Taxa que o PagBank descontou',money(r.provider_fee_amount)],['PagBank deveria pagar',money(r.expected_net_amount)],['PagBank pagou',money(r.net_amount)],['Diferença',money(r.difference_amount)],['BIN/IIN',r.card_bin||'—'],['Final cartão',r.last4||'—'],['PDV',r.serial_number||'—']];document.querySelector('#detailGrid').innerHTML=items.map(x=>'<div class="detail"><span>'+x[0]+'</span><b title="'+String(x[1]).replaceAll('"','&quot;')+'">'+x[1]+'</b></div>').join('');document.querySelector('#detailModal').classList.remove('hide')}
 async function load(){
@@ -433,10 +547,13 @@ document.querySelector('#concPrev').onclick=()=>{if(concPage>1){concPage--;rende
 document.querySelector('#concNext').onclick=()=>{concPage++;renderConc()};
 document.querySelector('#divPrev').onclick=()=>{if(divPage>1){divPage--;renderDiv()}};
 document.querySelector('#divNext').onclick=()=>{divPage++;renderDiv()};
+document.querySelector('#loadFinancial').onclick=loadFinancial;
+document.querySelector('#finPrev').onclick=()=>{if(finPage>1){finPage--;renderFinancial()}};
+document.querySelector('#finNext').onclick=()=>{finPage++;renderFinancial()};
 document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailModal').classList.add('hide');
 document.querySelector('#detailModal').onclick=e=>{if(e.target.id==='detailModal')e.currentTarget.classList.add('hide')};
 document.addEventListener('click',e=>{const row=e.target.closest('[data-tx]');if(row)showDetail(row.dataset.tx)});
-document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.querySelector('#'+b.dataset.page).classList.add('active');document.querySelector('#title').textContent={dash:'Visão geral',conc:'Transações',rates:'Taxas do contrato',div:'A recuperar'}[b.dataset.page]});
+document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.querySelector('#'+b.dataset.page).classList.add('active');document.querySelector('#title').textContent={dash:'Visão geral',conc:'Transações',recv:'Recebimentos PagBank',rates:'Taxas do contrato',div:'A recuperar'}[b.dataset.page];if(b.dataset.page==='recv'&&!financialLoaded){document.querySelector('#finFrom').value=document.querySelector('#from').value;document.querySelector('#finTo').value=document.querySelector('#to').value;loadFinancial()}});
 document.querySelector('#rateGrid').innerHTML=[
 ['Débito Visa / Mastercard / Elo','1,04%'],['Débito Cabal','2,39%'],['Débito demais bandeiras','2,39%'],['PIX','0,10%'],['Visa / Mastercard crédito 1x','3,11%'],['Elo crédito 1x','3,39%'],['Diners crédito 1x','3,19%'],['Hipercard / grupo crédito 1x','3,71%'],['Visa / Mastercard / Elo 2x–6x','2,55%'],['Hipercard / grupo 2x–6x','3,00%'],['Diners 2x–18x','3,79%'],['Crédito 7x–18x (grupo)','5,59%'],['Acréscimo vendas parceladas','1,55%/mês']
 ].map(x=>'<div class="rate"><span class="muted small">'+x[0]+'</span><strong>'+x[1]+'</strong></div>').join('');
@@ -444,7 +561,7 @@ api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){do
 </script></body></html>`;
 
 app.get("/", () => html(PAGE, 200, { "cache-control": "no-store" }));
-app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.0.0" }));
+app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.1.0" }));
 app.get("/api/session", async (ctx) => json({ authenticated: await hasSession(ctx.req) }));
 
 app.post("/api/login", async (ctx) => {
@@ -457,6 +574,53 @@ app.post("/api/login", async (ctx) => {
   const signature = await sign(stamp);
   return json({ ok: true }, 200, {
     "set-cookie": `sp_concilia_session=${encodeURIComponent(stamp + "." + signature)}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax`,
+  });
+});
+
+app.get("/api/financial", async (ctx) => {
+  if (!(await hasSession(ctx.req))) return json({ ok: false, message: "Sessão expirada." }, 401);
+  const user = Deno.env.get("PAGBANK_EDI_USER");
+  const token = Deno.env.get("PAGBANK_EDI_TOKEN");
+  if (!user || !token) return json({ ok: false, message: "EDI PagBank ainda não configurado no servidor." }, 503);
+
+  const url = new URL(ctx.req.url);
+  const from = url.searchParams.get("from") || "";
+  const to = url.searchParams.get("to") || "";
+  const days = daysBetween(from, to);
+  if (!days.length) return json({ ok: false, message: "Período inválido." }, 400);
+  if (days.length > 31) return json({ ok: false, message: "Consulte no máximo 31 dias por vez." }, 400);
+
+  const successful: any[] = [];
+  const failed: { day: string; message: string }[] = [];
+  const concurrency = 3;
+  for (let i = 0; i < days.length; i += concurrency) {
+    const batch = days.slice(i, i + concurrency);
+    const settled = await Promise.allSettled(batch.map((day) => financialDay(user, token, day)));
+    settled.forEach((item, index) => {
+      const day = batch[index];
+      if (item.status === "fulfilled") successful.push(item.value);
+      else failed.push({ day, message: String(item.reason?.message || item.reason || "Falha EDI financeiro").slice(0, 160) });
+    });
+  }
+
+  if (!successful.length) {
+    return json({ ok: false, message: failed[0]?.message || "Nenhum dia financeiro pôde ser consultado.", failed_days: failed }, 502);
+  }
+
+  const allRows = successful.flatMap((r) => r.rows);
+  const rows = allRows
+    .sort((a: any, b: any) => String(b.movement_date).localeCompare(String(a.movement_date)))
+    .slice(0, 1000);
+
+  return json({
+    ok: true,
+    partial: failed.length > 0,
+    source: "PAGBANK_EDI_FINANCIAL",
+    range: { from, to },
+    summary: summarizeFinancial(allRows),
+    rows,
+    edi_days: successful.map((r) => ({ day: r.day, available: r.available, validated: r.validated, received: r.received, eligible: r.rows.length })),
+    failed_days: failed,
   });
 });
 
