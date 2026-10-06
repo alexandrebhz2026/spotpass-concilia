@@ -5,6 +5,7 @@ export const app = new App();
 const EDI_BASE = "https://edi.api.pagbank.com.br/movement/v3.00";
 const PARCEL_MONTHLY_RATE = 1.55;
 const FINANCIAL_DAY_CACHE = new Map<string, { expires: number; payload: any }>();
+const RECOVERABLE_MONTH_CACHE = new Map<string, { expires: number; payload: any }>();
 
 function json(data: unknown, status = 200, headers: HeadersInit = {}) {
   return new Response(JSON.stringify(data), {
@@ -460,13 +461,13 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 .rate{padding:9px 10px;border:1px solid var(--line);background:#fff;border-radius:10px;min-width:0;display:flex;flex-direction:column;justify-content:center}.rate strong{display:block;font-size:16px;margin:4px 0}
 .small{font-size:10px}.danger{color:var(--red);font-weight:800}
 .pager{height:34px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex:0 0 auto;padding-top:5px}.pager .btn{height:28px}.pagerInfo{font-size:9px;color:var(--muted)}
-.audit-head{display:grid;grid-template-columns:minmax(0,1.8fr) .7fr .9fr .9fr .7fr;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:8px;font-weight:800;text-transform:uppercase;color:var(--muted)}.audit-list{min-height:0;flex:1;overflow:hidden}.audit-item{height:46px;border-bottom:1px solid #eef0f2;display:grid;grid-template-columns:minmax(0,1.8fr) .7fr .9fr .9fr .7fr;gap:10px;align-items:center;padding:5px 2px;font-size:10px}.audit-item b,.audit-item span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.month-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 7px}.month-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin-bottom:8px;flex:0 0 auto}.month-card{height:62px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 9px;cursor:pointer;text-align:left;min-width:0}.month-card:hover{border-color:#efb492;background:#fffaf7}.month-card.active{border-color:var(--o);background:#fff7f2}.month-card.future{opacity:.45;cursor:default}.month-card .mname{display:block;font-size:8px;text-transform:uppercase;color:var(--muted);font-weight:800}.month-card strong{display:block;font-size:15px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.month-card small{font-size:8px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}.audit-head{display:grid;grid-template-columns:minmax(0,1.8fr) .7fr .9fr .9fr .7fr;gap:10px;padding:6px 2px;border-bottom:1px solid var(--line);font-size:8px;font-weight:800;text-transform:uppercase;color:var(--muted)}.audit-list{min-height:0;flex:1;overflow:hidden}.audit-item{height:46px;border-bottom:1px solid #eef0f2;display:grid;grid-template-columns:minmax(0,1.8fr) .7fr .9fr .9fr .7fr;gap:10px;align-items:center;padding:5px 2px;font-size:10px}.audit-item b,.audit-item span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .modal{position:fixed;inset:0;background:rgba(20,23,28,.25);display:grid;place-items:center;z-index:40;padding:18px}.modal.hide{display:none}.modal-card{width:min(760px,94vw);max-height:88vh;background:#fff;border:1px solid var(--line);border-radius:16px;box-shadow:0 20px 55px rgba(17,24,39,.18);padding:16px;overflow:hidden}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.detail{border:1px solid var(--line);border-radius:9px;padding:9px;min-width:0}.detail span{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;font-weight:800;margin-bottom:4px}.detail b{font-size:11px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #dash .panel{margin-bottom:0}
 #conc .panel,#div .panel{margin-top:0}
 #rates{padding-bottom:0}
-@media(max-width:1100px){.app{grid-template-columns:190px minmax(0,1fr)}.side{width:190px}.grid{grid-template-columns:repeat(5,minmax(0,1fr))}.card strong{font-size:15px}.rates{grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:96px}.main{padding-left:12px;padding-right:12px}th,td{font-size:8.5px;padding:4px}}
-@media(max-width:760px){html,body{overflow:hidden}.app{display:block}.side{position:absolute;z-index:20;width:100%;height:58px;border-right:0;border-bottom:1px solid var(--line);padding:8px 10px;display:flex;align-items:center;gap:8px}.brand{margin:0}.mark{width:32px;height:32px}.side nav{display:flex;gap:3px;overflow:hidden}.side nav button{width:auto;margin:0;padding:7px 8px;font-size:9px}.main{grid-column:auto;height:100vh;padding:58px 8px 8px}.top{height:54px}.page{height:calc(100vh - 112px);padding-top:8px}.top h1{font-size:18px}.grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:58px}.grid .card:nth-child(5){display:none}.rates{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:76px}.note{font-size:9px}.detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1100px){.app{grid-template-columns:190px minmax(0,1fr)}.side{width:190px}.grid{grid-template-columns:repeat(5,minmax(0,1fr))}.card strong{font-size:15px}.rates{grid-template-columns:repeat(4,minmax(0,1fr));grid-auto-rows:96px}.month-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.main{padding-left:12px;padding-right:12px}th,td{font-size:8.5px;padding:4px}}
+@media(max-width:760px){html,body{overflow:hidden}.app{display:block}.side{position:absolute;z-index:20;width:100%;height:58px;border-right:0;border-bottom:1px solid var(--line);padding:8px 10px;display:flex;align-items:center;gap:8px}.brand{margin:0}.mark{width:32px;height:32px}.side nav{display:flex;gap:3px;overflow:hidden}.side nav button{width:auto;margin:0;padding:7px 8px;font-size:9px}.main{grid-column:auto;height:100vh;padding:58px 8px 8px}.top{height:54px}.page{height:calc(100vh - 112px);padding-top:8px}.top h1{font-size:18px}.grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:58px}.grid .card:nth-child(5){display:none}.rates{grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:76px}.month-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.month-card{height:54px;padding:6px 7px}.month-card strong{font-size:12px}.note{font-size:9px}.detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style></head><body>
 <div id="login" class="login"><form id="loginForm" class="loginbox"><div class="brand"><div class="mark"><svg viewBox="0 0 449 449"><rect width="449" height="449" fill="#F15613"/><path fill="#fff" d="M127 80 L112 91 L99 107 L90 125 L84 151 L84 304 L88 319 L87 321 L93 339 L107 360 L126 376 L150 386 L166 389 L256 390 L282 386 L304 377 L319 366 L331 353 L341 335 L346 320 L349 299 L348 171 L340 164 L282 164 L275 168 L272 174 L272 293 L269 306 L260 317 L244 323 L189 323 L174 318 L165 308 L161 290 L162 157 L165 148 L176 137 L191 133 L232 133 L239 129 L242 119 L241 75 L238 70 L233 67 L170 67 L146 72 L131 78 L131 80 Z"/><path fill="#fff" d="M275 56 L272 64 L272 124 L278 132 L283 134 L350 134 L359 130 L362 125 L362 120 L356 104 L343 86 L328 72 L300 56 L290 53 L281 53 Z"/></svg></div><div><b>SpotPass Concilia</b><small>acesso da equipe</small></div></div><div class="muted small">Use a senha interna do conciliador.</div><input id="password" type="password" placeholder="Senha"><div id="loginErr" class="small" style="color:#b93b4d;min-height:20px"></div><button class="btn primary" style="width:100%;height:42px">Entrar</button></form></div>
 
@@ -491,7 +492,7 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 
 <section id="rates" class="page"><div class="note"><b>Para que serve esta página:</b> estas são as taxas do contrato usadas para calcular quanto o PagBank deveria descontar em cada venda. O sistema escolhe a taxa pela forma de pagamento, bandeira e número de parcelas.</div><div id="rateGrid" class="rates"></div></section>
 
-<section id="div" class="page"><div class="panel"><div class="ey">VALORES A RECUPERAR • LIQUIDAÇÃO</div><h3>Movimentos em que o PagBank liquidou menos do que deveria</h3><div id="divPeriod" class="muted small" style="margin-bottom:7px">Carregando o EDI financeiro...</div><div class="audit-head"><span>Transação</span><span>Vendido</span><span>Deveria liquidar</span><span>Liquidado</span><span>Diferença</span></div><div id="divergences" class="audit-list"></div><div class="pager"><span id="divPageInfo" class="pagerInfo"></span><div><button id="divPrev" class="btn">Anterior</button> <button id="divNext" class="btn">Próxima</button></div></div></div></section>
+<section id="div" class="page"><div class="panel"><div class="month-toolbar"><div><div class="ey">VALORES A RECUPERAR • MÊS A MÊS</div><h3 style="margin:3px 0!important">Quanto o PagBank deixou de liquidar corretamente</h3></div><select id="recoverYear" class="input" style="width:92px"></select></div><div id="monthGrid" class="month-grid"></div><div id="divPeriod" class="muted small" style="margin-bottom:7px">Clique em um mês para ver as transações que formam o valor.</div><div class="audit-head"><span>Transação</span><span>Vendido</span><span>Deveria liquidar</span><span>Liquidado</span><span>Diferença</span></div><div id="divergences" class="audit-list"></div><div class="pager"><span id="divPageInfo" class="pagerInfo"></span><div><button id="divPrev" class="btn">Anterior</button> <button id="divNext" class="btn">Próxima</button></div></div></div></section>
 </main></div>
 <div id="detailModal" class="modal hide"><div class="modal-card"><div class="modal-head"><div><div class="ey">DETALHES DA TRANSAÇÃO</div><b id="detailTitle"></b></div><button id="detailClose" class="btn">Fechar</button></div><div id="detailGrid" class="detail-grid"></div></div></div>
 
@@ -501,20 +502,29 @@ const pct=v=>v==null?'—':Number(v).toFixed(2).replace('.',',')+'%';
 function spDay(value){const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value));const get=t=>parts.find(p=>p.type===t)?.value||'';return get('year')+'-'+get('month')+'-'+get('day')}
 const lastClosedDay=spDay(Date.now()-86400000);
 ['from','to','finFrom','finTo'].forEach(id=>{const el=document.querySelector('#'+id);el.value=lastClosedDay;el.max=lastClosedDay});
-let data={rows:[],summary:{}},financialData={rows:[],summary:{}},concPage=1,divPage=1,finPage=1,financialLoaded=false;
+let data={rows:[],summary:{}},financialData={rows:[],summary:{}},monthlyRecoverable={},concPage=1,divPage=1,finPage=1,financialLoaded=false,monthlyLoading=false;
 const PAGE_SIZE=8,DIV_SIZE=8,FIN_SIZE=8;
+const MONTH_NAMES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+let recoverYear=Number(lastClosedDay.slice(0,4)),selectedRecoverMonth=null;
 async function api(url,opt){const r=await fetch(url,{credentials:'include',...(opt||{})});if(r.status===401)document.querySelector('#login').classList.remove('hide');return r}
 function isoDays(from,to){const a=new Date(from+'T00:00:00Z'),b=new Date(to+'T00:00:00Z'),out=[];for(let t=a.getTime();t<=b.getTime()&&out.length<32;t+=86400000)out.push(new Date(t).toISOString().slice(0,10));return out}
 function emptyFinancialSummary(){return {movement_count:0,settlement_count:0,adjustment_count:0,comparable_count:0,total_settled:0,total_fees:0,expected_comparable:0,actual_comparable:0,difference_comparable:0,to_recover:0}}
 function addFinancialSummary(a,b){for(const k of ['movement_count','settlement_count','adjustment_count','comparable_count','total_settled','total_fees','expected_comparable','actual_comparable','to_recover'])a[k]=Number(a[k]||0)+Number(b?.[k]||0);a.difference_comparable=Number((a.expected_comparable-a.actual_comparable).toFixed(2));for(const k of ['total_settled','total_fees','expected_comparable','actual_comparable','difference_comparable','to_recover'])a[k]=Number(a[k].toFixed(2));return a}
 function currentPage(){return document.querySelector('nav button.active')?.dataset?.page||'dash'}
+const recoverYearEl=document.querySelector('#recoverYear');for(let y=Number(lastClosedDay.slice(0,4));y>=Number(lastClosedDay.slice(0,4))-3;y--){const o=document.createElement('option');o.value=String(y);o.textContent=String(y);recoverYearEl.appendChild(o)}recoverYearEl.value=String(recoverYear);
 document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const r=await api('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#password').value})});const j=await r.json();if(!r.ok){document.querySelector('#loginErr').textContent=j.message||'Falha';return}document.querySelector('#login').classList.add('hide');load()};
 function pill(row){if(row.calculation_status==='PARCELAMENTO_AGUARDA_CALIBRACAO')return '<span class="pill warn">Regra parcelada pendente</span>';if(row.calculation_status==='TAXA_NAO_RESOLVIDA')return '<span class="pill warn">Taxa não identificada</span>';const d=Number(row.difference_amount||0);if(Math.abs(d)<.01)return '<span class="pill ok">Correto</span>';if(d>0)return '<span class="pill bad">Pagou menos</span>';return '<span class="pill ok">Pagou mais</span>'}
 function topTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+money(row.expected_net_amount)+'</td><td>'+money(row.net_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
 function compactTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+pct(row.contract_base_rate)+'</td><td>'+money(row.expected_net_amount)+'</td><td>'+money(row.net_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
 function filteredRows(){const q=(document.querySelector('#search').value||'').toLowerCase();return data.rows.filter(r=>!q||(r.transaction_id+' '+(r.brand||r.provider_brand||'')+' '+r.payment_method).toLowerCase().includes(q))}
 function renderConc(){const rows=filteredRows(),pages=Math.max(1,Math.ceil(rows.length/PAGE_SIZE));if(concPage>pages)concPage=pages;const start=(concPage-1)*PAGE_SIZE,slice=rows.slice(start,start+PAGE_SIZE);document.querySelector('#allRows').innerHTML=slice.map(compactTr).join('')||'<tr><td colspan="11" class="muted">Nenhuma transação.</td></tr>';document.querySelector('#concPageInfo').textContent='Página '+concPage+' de '+pages+' • '+rows.length+' transações';document.querySelector('#concPrev').disabled=concPage<=1;document.querySelector('#concNext').disabled=concPage>=pages}
-function renderDiv(){const rows=(financialData.recoverable_rows||[]);const pages=Math.max(1,Math.ceil(rows.length/DIV_SIZE));if(divPage>pages)divPage=pages;const start=(divPage-1)*DIV_SIZE;const range=financialData.range;document.querySelector('#divPeriod').innerHTML=range?'<b>Período financeiro:</b> '+range.from.split('-').reverse().join('/')+' a '+range.to.split('-').reverse().join('/')+' • <b>Total a recuperar:</b> '+money(financialData.summary?.to_recover||0):'Abra Recebimentos PagBank ou aguarde a consulta financeira.';document.querySelector('#divergences').innerHTML=rows.slice(start,start+DIV_SIZE).map(r=>'<div class="audit-item"><b>'+(r.transaction_id||r.movement_id)+' · '+(r.brand||r.provider_brand||'—')+'</b><span>'+money(r.gross_amount)+'</span><span>'+money(r.expected_settlement_amount)+'</span><span>'+money(r.settled_amount)+'</span><span class="danger">'+money(r.settlement_difference_amount)+'</span></div>').join('')||'<div class="muted">Nenhuma liquidação com valor a recuperar neste período.</div>';document.querySelector('#divPageInfo').textContent='Página '+divPage+' de '+pages+' • '+rows.length+' divergências de liquidação';document.querySelector('#divPrev').disabled=divPage<=1;document.querySelector('#divNext').disabled=divPage>=pages}
+function renderDiv(){const rows=(financialData.recoverable_rows||[]);const pages=Math.max(1,Math.ceil(rows.length/DIV_SIZE));if(divPage>pages)divPage=pages;const start=(divPage-1)*DIV_SIZE;const range=financialData.range;document.querySelector('#divPeriod').innerHTML=range?'<b>'+String(range.from).slice(5,7)+'/'+String(range.from).slice(0,4)+':</b> '+money(financialData.summary?.to_recover||0)+' a recuperar • clique nas linhas para conferir o detalhe.':'Clique em um mês acima para ver as transações que formam o valor.';document.querySelector('#divergences').innerHTML=rows.slice(start,start+DIV_SIZE).map(r=>'<div class="audit-item"><b>'+(r.transaction_id||r.movement_id)+' · '+(r.brand||r.provider_brand||'—')+'</b><span>'+money(r.gross_amount)+'</span><span>'+money(r.expected_settlement_amount)+'</span><span>'+money(r.settled_amount)+'</span><span class="danger">'+money(r.settlement_difference_amount)+'</span></div>').join('')||'<div class="muted">Nenhuma liquidação com valor a recuperar neste período.</div>';document.querySelector('#divPageInfo').textContent='Página '+divPage+' de '+pages+' • '+rows.length+' divergências de liquidação';document.querySelector('#divPrev').disabled=divPage<=1;document.querySelector('#divNext').disabled=divPage>=pages}
+function monthKey(year,month){return year+'-'+String(month).padStart(2,'0')}
+function monthClosedEnd(year,month){const last=new Date(Date.UTC(year,month,0)).toISOString().slice(0,10);return last>lastClosedDay?lastClosedDay:last}
+function renderMonthGrid(){const currentYM=lastClosedDay.slice(0,7);let html='';for(let m=1;m<=12;m++){const key=monthKey(recoverYear,m),entry=monthlyRecoverable[key],future=key>currentYM,active=selectedRecoverMonth===key;let value='—',sub=future?'Ainda não fechado':'Clique para carregar';if(entry?.loading){value='…';sub='Calculando'}else if(entry?.loaded){value=money(entry.to_recover||0);sub=(entry.count||0)+' divergência'+((entry.count||0)===1?'':'s')}else if(entry?.error){value='Erro';sub='Tentar novamente'}html+='<button class="month-card '+(future?'future ':'')+(active?'active':'')+'" data-month="'+key+'" '+(future?'disabled':'')+'><span class="mname">'+MONTH_NAMES[m-1]+'</span><strong>'+value+'</strong><small>'+sub+'</small></button>'}document.querySelector('#monthGrid').innerHTML=html}
+async function loadMonthSummary(key){if(monthlyRecoverable[key]?.loading||monthlyRecoverable[key]?.loaded)return;monthlyRecoverable[key]={loading:true};renderMonthGrid();try{const r=await api('/api/recoverable-month?month='+encodeURIComponent(key));const j=await r.json().catch(()=>({}));if(!r.ok||!j.ok)throw new Error(j.message||'Falha EDI');monthlyRecoverable[key]={loaded:true,to_recover:Number(j.to_recover||0),count:Number(j.recoverable_count||0),partial:!!j.partial}}catch(e){monthlyRecoverable[key]={error:true,message:e?.message||String(e)}}renderMonthGrid()}
+async function loadRecoverableYear(year){if(monthlyLoading)return;monthlyLoading=true;recoverYear=Number(year);renderMonthGrid();const currentYM=lastClosedDay.slice(0,7),keys=[];for(let m=1;m<=12;m++){const key=monthKey(recoverYear,m);if(key<=currentYM&&!monthlyRecoverable[key]?.loaded)keys.push(key)}for(let i=0;i<keys.length;i+=2){await Promise.all(keys.slice(i,i+2).map(loadMonthSummary));if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+Math.min(i+2,keys.length)+'/'+keys.length+' MESES'}monthlyLoading=false;if(currentPage()==='div')document.querySelector('#status').textContent='A RECUPERAR • '+recoverYear}
+async function openRecoverMonth(key){selectedRecoverMonth=key;renderMonthGrid();const [y,m]=key.split('-').map(Number);const from=key+'-01',to=monthClosedEnd(y,m);document.querySelector('#finFrom').value=from;document.querySelector('#finTo').value=to;financialLoaded=false;await loadFinancial();renderDiv()}
 function finEventLabel(r){if(r.event_type==='1'&&r.transaction_type==='1')return '<span class="pill ok">Liquidação</span>';return '<span class="pill warn">Evento '+(r.event_type||'—')+'</span>'}
 function finTr(r){const d=r.settlement_difference_amount;return '<tr><td>'+String(r.movement_date||'')+'</td><td>'+(r.transaction_id||'—')+'</td><td>'+(r.brand||r.provider_brand||'—')+'</td><td>'+r.payment_method+'</td><td>'+r.installment+'/'+r.installments+'</td><td>'+money(r.gross_amount)+'</td><td>'+money(r.expected_settlement_amount)+'</td><td>'+money(r.settled_amount)+'</td><td class="'+(Number(d)>0?'danger':'')+'">'+money(d)+'</td><td>'+finEventLabel(r)+'</td></tr>'}
 function renderFinancial(){const s=financialData.summary||{};document.querySelector('#finCards').innerHTML=[['Liquidado no período',money(s.total_settled),(s.settlement_count||0)+' movimentos de liquidação'],['Taxas no financeiro',money(s.total_fees),'taxa + tarifa EDI'],['Deveria liquidar',money(s.expected_comparable),(s.comparable_count||0)+' operações comparáveis'],['Liquidou',money(s.actual_comparable),'mesmas operações comparáveis'],['A recuperar',money(s.to_recover),'diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const rows=financialData.rows||[],pages=Math.max(1,Math.ceil(rows.length/FIN_SIZE));if(finPage>pages)finPage=pages;const start=(finPage-1)*FIN_SIZE;document.querySelector('#finRows').innerHTML=rows.slice(start,start+FIN_SIZE).map(finTr).join('')||'<tr><td colspan="10" class="muted">Nenhum movimento financeiro no período.</td></tr>';document.querySelector('#finPageInfo').textContent='Página '+finPage+' de '+pages+' • '+rows.length+' movimentos exibidos';document.querySelector('#finPrev').disabled=finPage<=1;document.querySelector('#finNext').disabled=finPage>=pages}
@@ -613,13 +623,15 @@ document.querySelector('#concPrev').onclick=()=>{if(concPage>1){concPage--;rende
 document.querySelector('#concNext').onclick=()=>{concPage++;renderConc()};
 document.querySelector('#divPrev').onclick=()=>{if(divPage>1){divPage--;renderDiv()}};
 document.querySelector('#divNext').onclick=()=>{divPage++;renderDiv()};
+document.querySelector('#recoverYear').onchange=e=>{recoverYear=Number(e.target.value);selectedRecoverMonth=null;financialData={rows:[],recoverable_rows:[],summary:{}};renderDiv();renderMonthGrid();loadRecoverableYear(recoverYear)};
+document.querySelector('#monthGrid').onclick=e=>{const card=e.target.closest('[data-month]');if(card&&!card.disabled)openRecoverMonth(card.dataset.month)};
 document.querySelector('#loadFinancial').onclick=loadFinancial;
 document.querySelector('#finPrev').onclick=()=>{if(finPage>1){finPage--;renderFinancial()}};
 document.querySelector('#finNext').onclick=()=>{finPage++;renderFinancial()};
 document.querySelector('#detailClose').onclick=()=>document.querySelector('#detailModal').classList.add('hide');
 document.querySelector('#detailModal').onclick=e=>{if(e.target.id==='detailModal')e.currentTarget.classList.add('hide')};
 document.addEventListener('click',e=>{const row=e.target.closest('[data-tx]');if(row)showDetail(row.dataset.tx)});
-document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.querySelector('#'+b.dataset.page).classList.add('active');document.querySelector('#title').textContent={dash:'Visão geral',conc:'Transações',recv:'Recebimentos PagBank',rates:'Taxas do contrato',div:'A recuperar'}[b.dataset.page];if((b.dataset.page==='recv'||b.dataset.page==='div')&&!financialLoaded){document.querySelector('#finFrom').value=document.querySelector('#from').value;document.querySelector('#finTo').value=document.querySelector('#to').value;loadFinancial()}else if(b.dataset.page==='div'){renderDiv();document.querySelector('#status').textContent='A RECUPERAR • '+money(financialData.summary?.to_recover||0)}else if(b.dataset.page==='recv'){document.querySelector('#status').textContent='FINANCEIRO • '+(financialData.summary?.settlement_count||0)+' MOVIMENTOS'}else if(b.dataset.page==='dash'||b.dataset.page==='conc'){document.querySelector('#status').textContent='EDI TRANSAÇÕES • '+(data.summary?.total_rows||0)+' TRANSAÇÕES'}});
+document.querySelectorAll('nav button[data-page]').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));document.querySelector('#'+b.dataset.page).classList.add('active');document.querySelector('#title').textContent={dash:'Visão geral',conc:'Transações',recv:'Recebimentos PagBank',rates:'Taxas do contrato',div:'A recuperar'}[b.dataset.page];if(b.dataset.page==='recv'&&!financialLoaded){document.querySelector('#finFrom').value=document.querySelector('#from').value;document.querySelector('#finTo').value=document.querySelector('#to').value;loadFinancial()}else if(b.dataset.page==='div'){renderMonthGrid();renderDiv();loadRecoverableYear(recoverYear)}else if(b.dataset.page==='recv'){document.querySelector('#status').textContent='FINANCEIRO • '+(financialData.summary?.settlement_count||0)+' MOVIMENTOS'}else if(b.dataset.page==='dash'||b.dataset.page==='conc'){document.querySelector('#status').textContent='EDI TRANSAÇÕES • '+(data.summary?.total_rows||0)+' TRANSAÇÕES'}});
 document.querySelector('#rateGrid').innerHTML=[
 ['Débito Visa / Mastercard / Elo','1,04%'],['Débito Cabal','2,39%'],['Débito demais bandeiras','2,39%'],['PIX','0,10%'],['Visa / Mastercard crédito 1x','3,11%'],['Elo crédito 1x','3,39%'],['Diners crédito 1x','3,19%'],['Hipercard / grupo crédito 1x','3,71%'],['Visa / Mastercard / Elo 2x–6x','2,55%'],['Hipercard / grupo 2x–6x','3,00%'],['Diners 2x–18x','3,79%'],['Crédito 7x–18x (grupo)','5,59%'],['Acréscimo vendas parceladas','1,55%/mês']
 ].map(x=>'<div class="rate"><span class="muted small">'+x[0]+'</span><strong>'+x[1]+'</strong></div>').join('');
@@ -627,7 +639,7 @@ api('/api/session').then(async r=>{const j=await r.json();if(j.authenticated){do
 </script></body></html>`;
 
 app.get("/", () => html(PAGE, 200, { "cache-control": "no-store" }));
-app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.3.0" }));
+app.get("/health", () => json({ ok: true, service: "spotpass-concilia", version: "1.4.0" }));
 app.get("/api/session", async (ctx) => json({ authenticated: await hasSession(ctx.req) }));
 
 app.post("/api/login", async (ctx) => {
@@ -641,6 +653,74 @@ app.post("/api/login", async (ctx) => {
   return json({ ok: true }, 200, {
     "set-cookie": `sp_concilia_session=${encodeURIComponent(stamp + "." + signature)}; Path=/; Max-Age=43200; HttpOnly; Secure; SameSite=Lax`,
   });
+});
+
+app.get("/api/recoverable-month", async (ctx) => {
+  if (!(await hasSession(ctx.req))) return json({ ok: false, message: "Sessão expirada." }, 401);
+  const user = Deno.env.get("PAGBANK_EDI_USER");
+  const token = Deno.env.get("PAGBANK_EDI_TOKEN");
+  if (!user || !token) return json({ ok: false, message: "EDI PagBank ainda não configurado no servidor." }, 503);
+
+  const url = new URL(ctx.req.url);
+  const month = url.searchParams.get("month") || "";
+  if (!/^\d{4}-\d{2}$/.test(month)) return json({ ok: false, message: "Mês inválido." }, 400);
+
+  const cachedMonth = RECOVERABLE_MONTH_CACHE.get(month);
+  if (cachedMonth && cachedMonth.expires > Date.now()) return json({ ...cachedMonth.payload, cached: true });
+
+  const [year, monthNumber] = month.split("-").map(Number);
+  const first = `${month}-01`;
+  const monthLast = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+  const todayClosed = new Date(Date.now() - 86400000).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const last = monthLast > todayClosed ? todayClosed : monthLast;
+  const days = daysBetween(first, last);
+  if (!days.length) return json({ ok: false, message: "Mês ainda não disponível." }, 400);
+
+  let toRecover = 0;
+  let recoverableCount = 0;
+  let movementCount = 0;
+  const failed: string[] = [];
+  const concurrency = 3;
+
+  for (let i = 0; i < days.length; i += concurrency) {
+    const batch = days.slice(i, i + concurrency);
+    const results = await Promise.allSettled(batch.map(async (day) => {
+      const cachedDay = FINANCIAL_DAY_CACHE.get(day);
+      if (cachedDay && cachedDay.expires > Date.now()) return cachedDay.payload;
+      const result = await financialDay(user, token, day);
+      const allRows = result.rows || [];
+      const summary = summarizeFinancial(allRows);
+      const recoverableRows = allRows.filter((r: any) => r.comparable && Number(r.settlement_difference_amount || 0) > 0);
+      const payload = { ok: true, day, validated: result.validated, summary, recoverable_count: recoverableRows.length };
+      if (result.validated === true) FINANCIAL_DAY_CACHE.set(day, { expires: Date.now() + 6 * 60 * 60 * 1000, payload });
+      return payload;
+    }));
+
+    results.forEach((item, index) => {
+      if (item.status === "fulfilled") {
+        toRecover += Number(item.value.summary?.to_recover || 0);
+        recoverableCount += Number(item.value.recoverable_count ?? item.value.recoverable_rows?.length ?? 0);
+        movementCount += Number(item.value.summary?.movement_count || 0);
+      } else {
+        failed.push(batch[index]);
+      }
+    });
+  }
+
+  const payload = {
+    ok: true,
+    month,
+    to_recover: round2(toRecover),
+    recoverable_count: recoverableCount,
+    movement_count: movementCount,
+    partial: failed.length > 0,
+    failed_days: failed,
+  };
+
+  if (!failed.length && monthLast <= todayClosed) {
+    RECOVERABLE_MONTH_CACHE.set(month, { expires: Date.now() + 6 * 60 * 60 * 1000, payload });
+  }
+  return json(payload);
 });
 
 app.get("/api/financial-day", async (ctx) => {
@@ -677,6 +757,7 @@ app.get("/api/financial-day", async (ctx) => {
       summary,
       rows,
       recoverable_rows: recoverableRows,
+      recoverable_count: recoverableRows.length,
     };
 
     // Dias validados mudam pouco; cache quente reduz leituras repetidas do EDI.
