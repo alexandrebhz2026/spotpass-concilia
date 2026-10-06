@@ -225,6 +225,8 @@ function summarize(rows: any[]) {
     pagbank_fee: 0,
     expected_base_fee: 0,
     expected_net: 0,
+    comparable_pagbank_net: 0,
+    net_difference: 0,
     to_recover: 0,
     divergent_count: 0,
     unresolved_count: 0,
@@ -246,11 +248,13 @@ function summarize(rows: any[]) {
 
     s.expected_base_fee += Number(row.expected_base_fee_amount || 0);
     s.expected_net += Number(row.expected_net_amount || 0);
+    s.comparable_pagbank_net += Number(row.net_amount || 0);
     const diff = Number(row.difference_amount || 0);
     if (diff > 0) s.to_recover += diff;
     if (Math.abs(diff) >= 0.01) s.divergent_count++;
   }
-  for (const key of ["gross", "pagbank_net", "pagbank_fee", "expected_base_fee", "expected_net", "to_recover"] as const) {
+  s.net_difference = round2(s.expected_net - s.comparable_pagbank_net);
+  for (const key of ["gross", "pagbank_net", "pagbank_fee", "expected_base_fee", "expected_net", "comparable_pagbank_net", "net_difference", "to_recover"] as const) {
     s[key] = round2(s[key]);
   }
   return s;
@@ -263,6 +267,8 @@ function mergeSummaries(parts: any[]) {
     pagbank_fee: 0,
     expected_base_fee: 0,
     expected_net: 0,
+    comparable_pagbank_net: 0,
+    net_difference: 0,
     to_recover: 0,
     divergent_count: 0,
     unresolved_count: 0,
@@ -275,12 +281,14 @@ function mergeSummaries(parts: any[]) {
     total.pagbank_fee += Number(part.pagbank_fee || 0);
     total.expected_base_fee += Number(part.expected_base_fee || 0);
     total.expected_net += Number(part.expected_net || 0);
+    total.comparable_pagbank_net += Number(part.comparable_pagbank_net || 0);
     total.to_recover += Number(part.to_recover || 0);
     total.divergent_count += Number(part.divergent_count || 0);
     total.unresolved_count += Number(part.unresolved_count || 0);
     total.parcel_pending_count += Number(part.parcel_pending_count || 0);
   }
-  for (const key of ["gross", "pagbank_net", "pagbank_fee", "expected_base_fee", "expected_net", "to_recover"] as const) {
+  total.net_difference = round2(total.expected_net - total.comparable_pagbank_net);
+  for (const key of ["gross", "pagbank_net", "pagbank_fee", "expected_base_fee", "expected_net", "comparable_pagbank_net", "net_difference", "to_recover"] as const) {
     total[key] = round2(total[key]);
   }
   return total;
@@ -365,9 +373,9 @@ tbody tr{height:29px;cursor:pointer}tbody tr:hover{background:#fffaf7}
 
 <section id="dash" class="page active"><div class="filters"><label class="muted small">De</label><input id="from" class="input" type="date"><label class="muted small">Até</label><input id="to" class="input" type="date"><button id="load" class="btn primary">Atualizar</button><span id="periodLabel" class="muted small"></span></div><div id="queryNotice" class="note" style="display:none"></div>
 
-<div id="cards" class="grid"></div><div class="panel"><div class="ey">TRANSAÇÃO A TRANSAÇÃO</div><h3 style="margin:5px 0 12px">Maiores diferenças calculáveis</h3><div class="tw"><table><thead><tr><th>Data</th><th>Transação</th><th>Bandeira</th><th>Modalidade</th><th>Parcelas</th><th>Bruto</th><th>MDR base</th><th>Taxa PagBank</th><th>Diferença</th><th>Status</th></tr></thead><tbody id="topRows"></tbody></table></div></div></section>
+<div id="cards" class="grid"></div><div class="panel"><div class="ey">TRANSAÇÃO A TRANSAÇÃO</div><h3 style="margin:5px 0 12px">Maiores diferenças calculáveis</h3><div class="tw"><table><thead><tr><th>Data</th><th>Transação</th><th>Bandeira</th><th>Modalidade</th><th>Parcelas</th><th>Bruto</th><th>Deveria pagar</th><th>PagBank pagou</th><th>Diferença</th><th>Status</th></tr></thead><tbody id="topRows"></tbody></table></div></div></section>
 
-<section id="conc" class="page"><div class="filters"><input id="search" class="input" style="width:260px" placeholder="Buscar transação ou bandeira"><span class="muted small">Clique em uma linha para ver todos os detalhes.</span></div><div class="panel"><div class="tw"><table><thead><tr><th style="width:9%">Data</th><th style="width:13%">Transação</th><th style="width:9%">Bandeira</th><th style="width:7%">Tipo</th><th style="width:6%">Parc.</th><th style="width:10%">Bruto</th><th style="width:8%">MDR</th><th style="width:10%">Taxa PagBank</th><th style="width:10%">Líquido</th><th style="width:9%">Diferença</th><th style="width:9%">Status</th></tr></thead><tbody id="allRows"></tbody></table></div><div class="pager"><span id="concPageInfo" class="pagerInfo"></span><div><button id="concPrev" class="btn">Anterior</button> <button id="concNext" class="btn">Próxima</button></div></div></div></section>
+<section id="conc" class="page"><div class="filters"><input id="search" class="input" style="width:260px" placeholder="Buscar transação ou bandeira"><span class="muted small">Clique em uma linha para ver todos os detalhes.</span></div><div class="panel"><div class="tw"><table><thead><tr><th style="width:9%">Data</th><th style="width:13%">Transação</th><th style="width:9%">Bandeira</th><th style="width:7%">Tipo</th><th style="width:6%">Parc.</th><th style="width:9%">Bruto</th><th style="width:7%">MDR</th><th style="width:11%">Deveria pagar</th><th style="width:11%">PagBank pagou</th><th style="width:9%">Diferença</th><th style="width:9%">Status</th></tr></thead><tbody id="allRows"></tbody></table></div><div class="pager"><span id="concPageInfo" class="pagerInfo"></span><div><button id="concPrev" class="btn">Anterior</button> <button id="concNext" class="btn">Próxima</button></div></div></div></section>
 
 <section id="rates" class="page"><div class="note">Taxas transcritas dos prints PagBank enviados. O acréscimo de <b>1,55%/mês</b> aparece nos cartões de crédito parcelados e é tratado separadamente do MDR base.</div><div id="rateGrid" class="rates"></div></section>
 
@@ -385,13 +393,13 @@ const PAGE_SIZE=8,DIV_SIZE=8;
 async function api(url,opt){const r=await fetch(url,{credentials:'include',...(opt||{})});if(r.status===401)document.querySelector('#login').classList.remove('hide');return r}
 document.querySelector('#loginForm').onsubmit=async e=>{e.preventDefault();const r=await api('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:document.querySelector('#password').value})});const j=await r.json();if(!r.ok){document.querySelector('#loginErr').textContent=j.message||'Falha';return}document.querySelector('#login').classList.add('hide');load()};
 function pill(row){if(row.calculation_status==='PARCELAMENTO_AGUARDA_CALIBRACAO')return '<span class="pill warn">Calibrar</span>';if(row.calculation_status==='TAXA_NAO_RESOLVIDA')return '<span class="pill warn">Pendente</span>';const d=Number(row.difference_amount||0);if(Math.abs(d)<.01)return '<span class="pill ok">Correto</span>';if(d>0)return '<span class="pill bad">A recuperar</span>';return '<span class="pill ok">Menor</span>'}
-function topTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+pct(row.contract_base_rate)+'</td><td>'+money(row.provider_fee_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
-function compactTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+pct(row.contract_base_rate)+'</td><td>'+money(row.provider_fee_amount)+'</td><td>'+money(row.net_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
+function topTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+money(row.expected_net_amount)+'</td><td>'+money(row.net_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
+function compactTr(row){const d=row.difference_amount;return '<tr data-tx="'+row.transaction_id+'"><td>'+String(row.occurred_at||'').replace('T',' ')+'</td><td>'+row.transaction_id+'</td><td>'+(row.brand||row.provider_brand||'—')+'</td><td>'+row.payment_method+'</td><td>'+row.installments+'x</td><td>'+money(row.gross_amount)+'</td><td>'+pct(row.contract_base_rate)+'</td><td>'+money(row.expected_net_amount)+'</td><td>'+money(row.net_amount)+'</td><td class="'+(d>0?'danger':'')+'">'+money(d)+'</td><td>'+pill(row)+'</td></tr>'}
 function filteredRows(){const q=(document.querySelector('#search').value||'').toLowerCase();return data.rows.filter(r=>!q||(r.transaction_id+' '+(r.brand||r.provider_brand||'')+' '+r.payment_method).toLowerCase().includes(q))}
 function renderConc(){const rows=filteredRows(),pages=Math.max(1,Math.ceil(rows.length/PAGE_SIZE));if(concPage>pages)concPage=pages;const start=(concPage-1)*PAGE_SIZE,slice=rows.slice(start,start+PAGE_SIZE);document.querySelector('#allRows').innerHTML=slice.map(compactTr).join('')||'<tr><td colspan="11" class="muted">Nenhuma transação.</td></tr>';document.querySelector('#concPageInfo').textContent='Página '+concPage+' de '+pages+' • '+rows.length+' transações';document.querySelector('#concPrev').disabled=concPage<=1;document.querySelector('#concNext').disabled=concPage>=pages}
 function renderDiv(){const rows=data.rows.filter(r=>r.difference_amount!=null&&Number(r.difference_amount)>0).sort((a,b)=>Number(b.difference_amount)-Number(a.difference_amount));const pages=Math.max(1,Math.ceil(rows.length/DIV_SIZE));if(divPage>pages)divPage=pages;const start=(divPage-1)*DIV_SIZE;document.querySelector('#divergences').innerHTML=rows.slice(start,start+DIV_SIZE).map(r=>'<div class="audit-item" data-tx="'+r.transaction_id+'"><b>'+r.transaction_id+' · '+(r.brand||'—')+'</b><span>'+money(r.gross_amount)+'</span><span>'+pct(r.contract_base_rate)+'</span><span class="danger">'+money(r.difference_amount)+'</span></div>').join('')||'<div class="muted">Nenhuma cobrança acima do contrato nas linhas calibradas.</div>';document.querySelector('#divPageInfo').textContent='Página '+divPage+' de '+pages+' • '+rows.length+' divergências';document.querySelector('#divPrev').disabled=divPage<=1;document.querySelector('#divNext').disabled=divPage>=pages}
-function render(){const s=data.summary||{};document.querySelector('#cards').innerHTML=[['Total transacionado',money(s.gross),(s.total_rows||0)+' transações'],['Líquido PagBank',money(s.pagbank_net),'informado no EDI'],['Taxa PagBank',money(s.pagbank_fee),'desconto efetivo'],['A recuperar',money(s.to_recover),'linhas calibradas','hot'],['Parceladas pendentes',String(s.parcel_pending_count||0),'calibrar 1,55%/mês']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const calc=data.rows.filter(r=>r.difference_amount!=null).sort((a,b)=>Math.abs(b.difference_amount)-Math.abs(a.difference_amount));document.querySelector('#topRows').innerHTML=calc.slice(0,6).map(topTr).join('')||'<tr><td colspan="10" class="muted">Sem diferenças calculáveis.</td></tr>';renderConc();renderDiv()}
-function showDetail(id){const r=data.rows.find(x=>String(x.transaction_id)===String(id));if(!r)return;document.querySelector('#detailTitle').textContent=r.transaction_id;const items=[['Data',String(r.occurred_at||'').replace('T',' ')],['Bandeira',r.brand||r.provider_brand||'—'],['Fonte da bandeira',r.brand_source||'—'],['Modalidade',r.payment_method],['Parcelas',r.installments+'x'],['Bruto',money(r.gross_amount)],['MDR base',pct(r.contract_base_rate)],['Acréscimo parcelado',r.parcel_monthly_rate?'1,55%/mês':'—'],['Taxa base esperada',money(r.expected_base_fee_amount)],['Taxa PagBank',money(r.provider_fee_amount)],['Líquido esperado',money(r.expected_net_amount)],['Líquido PagBank',money(r.net_amount)],['Diferença',money(r.difference_amount)],['BIN/IIN',r.card_bin||'—'],['Final cartão',r.last4||'—'],['PDV',r.serial_number||'—']];document.querySelector('#detailGrid').innerHTML=items.map(x=>'<div class="detail"><span>'+x[0]+'</span><b title="'+String(x[1]).replaceAll('"','&quot;')+'">'+x[1]+'</b></div>').join('');document.querySelector('#detailModal').classList.remove('hide')}
+function render(){const s=data.summary||{};const pend=(s.parcel_pending_count||0)+(s.unresolved_count||0);document.querySelector('#cards').innerHTML=[['Total transacionado',money(s.gross),(s.total_rows||0)+' transações'],['Deveria pagar',money(s.expected_net),pend?pend+' transações pendentes':'contrato calculado'],['PagBank pagou',money(s.comparable_pagbank_net),'mesmas transações calculáveis'],['Diferença líquida',money(s.net_difference),Number(s.net_difference)>0?'PagBank pagou menos':(Number(s.net_difference)<0?'PagBank pagou mais':'valores iguais'),Number(s.net_difference)>0?'hot':''],['A recuperar',money(s.to_recover),'soma das diferenças positivas','hot']].map(x=>'<div class="card '+(x[3]||'')+'"><span>'+x[0]+'</span><strong>'+x[1]+'</strong><small class="muted">'+x[2]+'</small></div>').join('');const calc=data.rows.filter(r=>r.difference_amount!=null).sort((a,b)=>Math.abs(b.difference_amount)-Math.abs(a.difference_amount));document.querySelector('#topRows').innerHTML=calc.slice(0,6).map(topTr).join('')||'<tr><td colspan="10" class="muted">Sem diferenças calculáveis.</td></tr>';renderConc();renderDiv()}
+function showDetail(id){const r=data.rows.find(x=>String(x.transaction_id)===String(id));if(!r)return;document.querySelector('#detailTitle').textContent=r.transaction_id;const items=[['Data',String(r.occurred_at||'').replace('T',' ')],['Bandeira',r.brand||r.provider_brand||'—'],['Fonte da bandeira',r.brand_source||'—'],['Modalidade',r.payment_method],['Parcelas',r.installments+'x'],['Bruto',money(r.gross_amount)],['MDR base',pct(r.contract_base_rate)],['Acréscimo parcelado',r.parcel_monthly_rate?'1,55%/mês':'—'],['Taxa base esperada',money(r.expected_base_fee_amount)],['Taxa PagBank',money(r.provider_fee_amount)],['Deveria pagar',money(r.expected_net_amount)],['PagBank pagou',money(r.net_amount)],['Diferença',money(r.difference_amount)],['BIN/IIN',r.card_bin||'—'],['Final cartão',r.last4||'—'],['PDV',r.serial_number||'—']];document.querySelector('#detailGrid').innerHTML=items.map(x=>'<div class="detail"><span>'+x[0]+'</span><b title="'+String(x[1]).replaceAll('"','&quot;')+'">'+x[1]+'</b></div>').join('');document.querySelector('#detailModal').classList.remove('hide')}
 async function load(){
   const f=document.querySelector('#from').value,t=document.querySelector('#to').value;
   const notice=document.querySelector('#queryNotice');
