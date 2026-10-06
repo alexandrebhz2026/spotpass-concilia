@@ -37,3 +37,5 @@ O EDI é consultado no servidor. USER/TOKEN não são enviados ao navegador.
 
 
 Release candidate v1.4
+
+Deploy retry 2026-10-05 22:19 BRT
