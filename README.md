@@ -34,3 +34,6 @@ Até a fórmula exata desse acréscimo ser calibrada contra uma transação parc
 
 ## Segurança
 O EDI é consultado no servidor. USER/TOKEN não são enviados ao navegador.
+
+
+Release candidate v1.4
